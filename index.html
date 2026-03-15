@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Forgebook Workspace</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="libraryView" class="library-view">
+        <header class="library-header premium-surface">
+          <div class="library-brand">
+            <p class="eyebrow">Vault</p>
+            <button id="creditsLogoButton" class="app-logo app-logo-button" type="button" aria-label="ForgeBook credits">
+              <svg class="app-logo-mark" viewBox="0 0 512 512" role="img" aria-hidden="true">
+                <defs>
+                  <filter id="logoGlow" x="-40%" y="-40%" width="180%" height="180%">
+                    <feGaussianBlur stdDeviation="10" result="blur"></feGaussianBlur>
+                    <feMerge>
+                      <feMergeNode in="blur"></feMergeNode>
+                      <feMergeNode in="SourceGraphic"></feMergeNode>
+                    </feMerge>
+                  </filter>
+                  <linearGradient id="logoMetal" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#ffffff"></stop>
+                    <stop offset="55%" stop-color="#eef3ff"></stop>
+                    <stop offset="100%" stop-color="#dbe7ff"></stop>
+                  </linearGradient>
+                </defs>
+                <g fill="url(#logoMetal)" filter="url(#logoGlow)">
+                  <path d="M256 52l16 45v109l18 17-34 112-34-112 18-17V97z"></path>
+                  <path d="M239 32h34l11 25c14 9 22 23 22 39h-18c0-11-7-20-18-24h-28c-11 4-18 13-18 24h-18c0-16 8-30 22-39z"></path>
+                  <path d="M256 335l-80-63 17-84-73 40-16-26 96-53 56 43 56-43 96 53-16 26-73-40 17 84z"></path>
+                  <path d="M128 217l31 15-20 85 117 92 117-92-20-85 31-15 29 120-157 123L99 337z"></path>
+                  <path d="M128 214c16-55 67-94 128-94s112 39 128 94l-17 5c-14-47-58-81-111-81s-97 34-111 81z"></path>
+                  <path d="M116 223l-27-12 19-43 27 12z"></path>
+                  <path d="M396 223l-19-43 27-12 19 43z"></path>
+                </g>
+              </svg>
+            </button>
+          </div>
+
+          <div class="header-actions">
+            <div class="library-search-wrap">
+              <label class="library-search">
+                <span>Search</span>
+                <input id="vaultSearchInput" type="search" placeholder="Find vaults" />
+              </label>
+            </div>
+            <div class="library-action-cluster library-action-cluster-muted">
+              <button id="libraryQuickSwitchButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">⌘</span>
+                <span>Switch</span>
+              </button>
+              <button id="libraryFriendsButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">◉</span>
+                <span>Friends</span>
+              </button>
+              <button id="libraryMessagesButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">✉</span>
+                <span>Messages</span>
+              </button>
+              <button id="libraryNotificationsButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">●</span>
+                <span>Alerts</span>
+              </button>
+              <button id="importWorkspaceButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">↓</span>
+                <span>Import</span>
+              </button>
+              <button id="exportWorkspaceButton" class="secondary-button compact-action-button" type="button">
+                <span class="button-icon">↑</span>
+                <span>Export</span>
+              </button>
+            </div>
+            <button id="libraryProfileButton" class="secondary-button compact-action-button" type="button">
+              <span aria-hidden="true">👤</span>
+              <span>Profile</span>
+            </button>
+            <button id="librarySettingsButton" class="secondary-button compact-action-button" type="button">
+              <span aria-hidden="true">⚙</span>
+              <span>Settings</span>
+            </button>
+            <button id="newCategoryButton" class="secondary-button compact-action-button" type="button">
+              Category
+            </button>
+            <button id="newVaultButton" class="primary-button compact-action-button" type="button">
+              New Vault
+            </button>
+          </div>
+        </header>
+
+        <section class="library-grid">
+          <aside class="library-sidebar premium-surface">
+            <div class="sidebar-block">
+              <p class="eyebrow">Explorer</p>
+              <div id="homeTree" class="tree-list"></div>
+            </div>
+          </aside>
+
+          <main class="library-main">
+            <section class="library-summary premium-surface">
+              <div class="summary-card premium-surface">
+                <span class="summary-label">Notes</span>
+                <strong id="docCount"></strong>
+              </div>
+              <div class="summary-card premium-surface">
+                <span class="summary-label">Folders</span>
+                <strong id="folderCount"></strong>
+              </div>
+              <div class="summary-card premium-surface">
+                <span class="summary-label">Open Tabs</span>
+                <strong id="tabCount"></strong>
+              </div>
+            </section>
+
+            <section class="section-heading">
+              <div>
+                <p class="eyebrow">Recent Work</p>
+                <h2>Jump back in</h2>
+              </div>
+            </section>
+
+            <section id="recentDocs" class="recent-docs"></section>
+
+            <section class="section-heading">
+              <div>
+                <p class="eyebrow">Vaults</p>
+                <h2>Your vaults</h2>
+              </div>
+            </section>
+
+            <section id="documentCards" class="document-cards"></section>
+            <section id="libraryEmptyState" class="library-empty-state hidden">
+              <p>No vaults found yet.</p>
+              <p id="libraryRecoveryCopy" class="library-recovery-copy hidden"></p>
+              <button id="recoverVaultsButton" class="secondary-button hidden" type="button">
+                Recover Saved Vaults
+              </button>
+              <button id="libraryCreateVaultButton" class="primary-button" type="button">
+                Create First Vault
+              </button>
+            </section>
+          </main>
+        </section>
+      </section>
+
+      <section id="workspaceView" class="workspace-view hidden">
+        <aside id="workspaceSidebar" class="workspace-sidebar">
+          <div class="workspace-brand compact-brand">
+            <button id="backToLibraryButton" class="secondary-button" type="button">
+              Back
+            </button>
+            <button id="closeSidebarButton" class="secondary-button icon-button" type="button" title="Close explorer">
+              ◀
+            </button>
+            <button id="quickCreateButton" class="primary-button icon-button" type="button" title="Create">
+              ✚
+            </button>
+          </div>
+
+          <p class="eyebrow">Explorer</p>
+
+          <div id="workspaceTree" class="tree-list"></div>
+        </aside>
+
+        <main class="workspace-main">
+          <header class="workspace-topbar workspace-headbar premium-surface">
+            <div class="workspace-head-left">
+              <button id="toggleSidebarButton" class="secondary-button icon-button" type="button" title="Toggle explorer">
+                🗂
+              </button>
+              <button id="headerQuickCreateButton" class="primary-button icon-button" type="button" title="Create">
+                ✚
+              </button>
+              <div class="workspace-vault-identity">
+                <div id="vaultBadge" class="vault-badge">
+                  <div id="vaultBadgeThumb" class="vault-badge-thumb">V</div>
+                </div>
+                <div class="workspace-vault-copy">
+                  <p class="eyebrow">Current Vault</p>
+                  <input id="vaultNameInput" class="vault-name-input" type="text" value="" placeholder="Vault name" />
+                </div>
+              </div>
+            </div>
+            <div class="workspace-head-right">
+              <div class="topbar-actions">
+                <button id="quickSwitchButton" class="secondary-button icon-button" type="button" title="Quick switch">
+                  ⌕
+                </button>
+                <button id="friendsButton" class="secondary-button icon-button" type="button" title="Friends">
+                  ◉
+                </button>
+                <button id="messagesButton" class="secondary-button icon-button" type="button" title="Messages">
+                  ✉
+                </button>
+                <button id="notificationsButton" class="secondary-button icon-button" type="button" title="Notifications">
+                  ●
+                </button>
+                <button id="shareVaultButton" class="secondary-button icon-button" type="button" title="Share vault">
+                  ↗
+                </button>
+                <button id="profileButton" class="secondary-button icon-button" type="button" title="Profile">
+                  👤
+                </button>
+                <button id="softwareSettingsButton" class="secondary-button icon-button" type="button" title="Appearance settings">
+                  ⚙
+                </button>
+                <button id="contextPanelToggleButton" class="secondary-button icon-button" type="button" title="Toggle context panel">
+                  ≣
+                </button>
+              </div>
+              <div class="topbar-actions">
+                <button id="vaultMenuButton" class="secondary-button icon-button" type="button" title="Vault options">
+                  ⋯
+                </button>
+              </div>
+              <div class="topbar-actions">
+              <button id="newSiblingDocButton" class="secondary-button" type="button">New File</button>
+              </div>
+            </div>
+          </header>
+
+          <div id="tabBar" class="tab-bar hidden"></div>
+
+          <section class="vault-contents-bar premium-surface hidden" aria-hidden="true">
+            <div class="vault-contents-copy">
+              <p class="eyebrow">Vault Contents</p>
+              <div class="vault-bar-title-row">
+                <h3 id="selectedVaultLabel">No vault selected</h3>
+              </div>
+            </div>
+            <div class="toolbar-group">
+              <button id="insertChecklistButton" class="tool-button icon-button" title="Checklist" type="button">[]</button>
+              <button id="insertCalloutButton" class="tool-button icon-button" title="Callout" type="button">!</button>
+              <button id="insertTableButton" class="tool-button icon-button" title="Table" type="button">#</button>
+            </div>
+          </section>
+
+          <section id="vaultTreePanel" class="vault-tree-panel premium-surface">
+            <div class="vault-tree-tools">
+              <label class="workspace-search">
+                <span>Files</span>
+                <input id="workspaceSearchInput" type="search" placeholder="Search files in this vault" />
+              </label>
+              <span class="workspace-shortcut-hint">Ctrl+N new file</span>
+            </div>
+            <div id="vaultContentsTree" class="tree-list"></div>
+          </section>
+
+          <section class="toolbar premium-surface motion-static">
+            <div class="toolbar-group">
+              <button class="tool-button icon-button" title="Bold" data-command="bold" type="button">B</button>
+              <button class="tool-button icon-button" title="Italic" data-command="italic" type="button"><em>I</em></button>
+              <button class="tool-button icon-button" title="Underline" data-command="underline" type="button"><u>U</u></button>
+              <button class="tool-button icon-button" title="Strikethrough" data-command="strikethrough" type="button"><s>S</s></button>
+            </div>
+            <div class="toolbar-group">
+              <button class="tool-button icon-button" title="Heading 1" data-block="h1" type="button">H1</button>
+              <button class="tool-button icon-button" title="Heading 2" data-block="h2" type="button">H2</button>
+              <button class="tool-button icon-button" title="Heading 3" data-block="h3" type="button">H3</button>
+              <button class="tool-button icon-button" title="Quote" data-block="blockquote" type="button">"</button>
+            </div>
+            <div class="toolbar-group">
+              <button class="tool-button icon-button" title="Bullet List" data-command="insertUnorderedList" type="button">•</button>
+              <button class="tool-button icon-button" title="Numbered List" data-command="insertOrderedList" type="button">1.</button>
+              <button class="tool-button icon-button" title="Outdent" data-command="outdent" type="button">←</button>
+              <button class="tool-button icon-button" title="Indent" data-command="indent" type="button">→</button>
+            </div>
+            <div class="toolbar-group">
+              <button class="tool-button icon-button" title="Code Block" data-command="formatBlock" data-value="pre" type="button">{ }</button>
+              <button id="inlineCodeButton" class="tool-button icon-button" title="Inline Code" type="button">&lt;/&gt;</button>
+              <button id="highlightButton" class="tool-button icon-button" title="Highlight" type="button">◆</button>
+              <button class="tool-button icon-button" title="Horizontal Rule" data-command="insertHorizontalRule" type="button">—</button>
+            </div>
+            <div class="toolbar-group">
+              <button class="tool-button icon-button" title="Align Left" data-command="justifyLeft" type="button">≡</button>
+              <button class="tool-button icon-button" title="Align Center" data-command="justifyCenter" type="button">≣</button>
+              <button class="tool-button icon-button" title="Align Right" data-command="justifyRight" type="button">☰</button>
+            </div>
+            <div class="toolbar-group toolbar-width-group">
+              <button class="tool-button icon-button writing-width-button" title="Narrow writing width" data-writing-width="1" type="button">1</button>
+              <button class="tool-button icon-button writing-width-button" title="Balanced writing width" data-writing-width="2" type="button">2</button>
+              <button class="tool-button icon-button writing-width-button" title="Wide writing width" data-writing-width="3" type="button">3</button>
+            </div>
+            <div class="toolbar-group">
+              <label class="tool-color">
+                <span>A</span>
+                <input id="textColorInput" type="color" value="#e6eaf2" />
+              </label>
+              <label class="tool-color">
+                <span>◨</span>
+                <input id="highlightColorInput" type="color" value="#5b4a15" />
+              </label>
+              <button class="tool-button icon-button" title="Link" data-command="createLink" type="button">⛓</button>
+              <button id="insertImageButton" class="tool-button icon-button" title="Image" type="button">▣</button>
+              <button class="tool-button icon-button" title="Clear Formatting" data-command="removeFormat" type="button">×</button>
+            </div>
+          </section>
+
+          <section class="toolbar-tail">
+            <div class="toolbar-group">
+              <button id="insertChecklistButtonVisible" class="tool-button icon-button" title="Checklist" type="button">[]</button>
+              <button id="insertCalloutButtonVisible" class="tool-button icon-button" title="Callout" type="button">!</button>
+              <button id="insertTableButtonVisible" class="tool-button icon-button" title="Table" type="button">#</button>
+            </div>
+          </section>
+
+          <section class="editor-shell">
+            <article id="editorPanel" class="editor-panel premium-surface motion-static">
+              <div class="editor-meta-bar">
+                <div class="editor-meta-copy">
+                  <p class="eyebrow">Current File</p>
+                  <div id="documentPath" class="document-path">No file selected</div>
+                </div>
+                <div class="editor-meta-actions">
+                  <span id="documentStateBadge" class="state-badge">Idle</span>
+                </div>
+              </div>
+
+              <div class="editor-title-row">
+                <label class="document-title-label" for="documentTitleInput">File name</label>
+                <input id="documentTitleInput" class="document-title-input" type="text" />
+              </div>
+
+              <div class="editor-writing-stage">
+                <div
+                  id="textEditor"
+                  class="text-editor"
+                  contenteditable="true"
+                  spellcheck="true"
+                ></div>
+                <div id="editorFloatingLayer" class="editor-floating-layer"></div>
+              </div>
+            </article>
+
+            <article id="canvasPanel" class="canvas-panel premium-surface motion-static hidden">
+              <div class="canvas-toolbar">
+                <label class="compact-field">
+                  <span>Color</span>
+                  <input id="canvasColorInput" type="color" value="#8b5cf6" />
+                </label>
+                <label class="compact-field">
+                  <span>Brush</span>
+                  <input id="brushSizeInput" type="range" min="2" max="18" value="5" />
+                </label>
+                <button id="clearCanvasButton" class="secondary-button" type="button">
+                  Clear
+                </button>
+              </div>
+
+              <canvas id="documentCanvas" width="1600" height="900"></canvas>
+            </article>
+
+            <article id="sheetPanel" class="sheet-panel premium-surface motion-static hidden">
+              <div class="sheet-workbench">
+                <aside class="sheet-sidebar-panel">
+                  <p class="eyebrow">Sheet Tools</p>
+                  <div class="sheet-sidebar-stack">
+                    <button id="addSheetTableButton" class="secondary-button" type="button">New Table</button>
+                    <button id="addSheetRowButton" class="secondary-button" type="button">Add Row</button>
+                    <button id="addSheetColumnButton" class="secondary-button" type="button">Add Column</button>
+                    <button id="deleteSheetRowButton" class="secondary-button" type="button">Delete Row</button>
+                    <button id="deleteSheetColumnButton" class="secondary-button" type="button">Delete Column</button>
+                    <button id="deleteSheetTableButton" class="secondary-button" type="button">Delete Table</button>
+                  </div>
+
+                  <div class="sheet-sidebar-section">
+                    <p class="eyebrow">Presets</p>
+                    <div class="sheet-sidebar-stack">
+                      <button class="secondary-button" data-sheet-preset="weapon" type="button">Weapon Table</button>
+                      <button class="secondary-button" data-sheet-preset="enemy" type="button">Enemy Stats</button>
+                      <button class="secondary-button" data-sheet-preset="economy" type="button">Economy Table</button>
+                      <button class="secondary-button" data-sheet-preset="progression" type="button">Progression Table</button>
+                      <button class="secondary-button" data-sheet-preset="loot" type="button">Loot Table</button>
+                    </div>
+                  </div>
+
+                  <div class="sheet-sidebar-section">
+                    <p class="eyebrow">Quick Notes</p>
+                    <p class="sheet-sidebar-copy">Type formulas with `=`. Example: `=Damage / FireRate` or `=round(BaseDamage * CritMultiplier)`.</p>
+                  </div>
+                </aside>
+
+                <div class="sheet-stage">
+                  <div class="sheet-toolbar">
+                <div class="sheet-toolbar-copy">
+                  <p class="eyebrow">Balancing Workspace</p>
+                  <h3 id="sheetWorkspaceTitle">Multi-table analysis</h3>
+                </div>
+                <div class="sheet-toolbar-actions">
+                  <div class="toolbar-group toolbar-group-tight">
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="table" type="button">New Table</button>
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="row" type="button">Add Row</button>
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="column" type="button">Add Column</button>
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="delete-row" type="button">Delete Row</button>
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="delete-column" type="button">Delete Column</button>
+                    <button class="secondary-button compact-action-button" data-sheet-toolbar-action="delete-table" type="button">Delete Table</button>
+                  </div>
+                  <div class="toolbar-group toolbar-group-tight">
+                    <button class="secondary-button compact-action-button" data-sheet-preset="weapon" type="button">Weapon</button>
+                    <button class="secondary-button compact-action-button" data-sheet-preset="enemy" type="button">Enemy</button>
+                    <button class="secondary-button compact-action-button" data-sheet-preset="economy" type="button">Economy</button>
+                    <button class="secondary-button compact-action-button" data-sheet-preset="progression" type="button">Progression</button>
+                    <button class="secondary-button compact-action-button" data-sheet-preset="loot" type="button">Loot</button>
+                  </div>
+                      <span id="sheetWorkspaceMeta" class="state-badge">0 tables</span>
+                </div>
+              </div>
+
+                  <div class="sheet-formula-bar">
+                    <span id="sheetSelectionLabel" class="sheet-selection-chip">A1</span>
+                    <span class="sheet-formula-fx">fx</span>
+                    <input id="sheetFormulaInput" class="sheet-formula-input" type="text" placeholder="Type a value or formula like =round(BaseDamage / FireRate)" />
+                    <div class="sheet-formula-actions">
+                      <button type="button" class="secondary-button sheet-fx-button" data-sheet-formula="=round()">ROUND</button>
+                      <button type="button" class="secondary-button sheet-fx-button" data-sheet-formula="=min()">MIN</button>
+                      <button type="button" class="secondary-button sheet-fx-button" data-sheet-formula="=max()">MAX</button>
+                      <button type="button" class="secondary-button sheet-fx-button" data-sheet-formula="=clamp(, 0, 100)">CLAMP</button>
+                    </div>
+                  </div>
+                  <div id="sheetFormulaSuggestions" class="sheet-formula-suggestions"></div>
+
+                  <div id="sheetGrid" class="sheet-grid-workspace" aria-label="Balancing sheet"></div>
+
+                  <section id="sheetAnalysisPanel" class="sheet-analysis-panel">
+                    <div class="sheet-analysis-head">
+                      <div>
+                        <p class="eyebrow">Analysis</p>
+                        <h3>Balance signals</h3>
+                      </div>
+                    </div>
+                    <div id="sheetAnalysisGrid" class="sheet-analysis-grid"></div>
+                  </section>
+                </div>
+              </div>
+            </article>
+
+            <article id="boardPanel" class="board-panel premium-surface motion-static hidden">
+              <div class="board-workbench">
+                <aside class="board-sidebar-panel">
+                  <p class="eyebrow">Manager Tools</p>
+                  <div class="board-sidebar-stack">
+                    <button id="addBoardColumnButton" class="secondary-button" type="button">Add Column</button>
+                    <button id="addBoardCardButton" class="secondary-button" type="button">Add Card</button>
+                    <button id="addBoardChecklistButton" class="secondary-button" type="button">Checklist Card</button>
+                  </div>
+
+                  <div class="board-sidebar-section">
+                    <p class="eyebrow">Presets</p>
+                    <div class="board-sidebar-stack">
+                      <button class="secondary-button" data-board-preset="production" type="button">Production Board</button>
+                      <button class="secondary-button" data-board-preset="sprint" type="button">Sprint Board</button>
+                      <button class="secondary-button" data-board-preset="review" type="button">Review Board</button>
+                    </div>
+                  </div>
+
+                  <div id="boardSummary" class="board-summary"></div>
+                </aside>
+
+                <div class="board-stage">
+                  <div class="board-toolbar">
+                <div class="board-toolbar-copy">
+                  <p class="eyebrow">Manager Board</p>
+                  <h3 id="boardWorkspaceTitle">Production board</h3>
+                </div>
+                <div class="board-toolbar-actions">
+                  <div class="toolbar-group toolbar-group-tight">
+                    <button class="secondary-button compact-action-button" data-board-toolbar-action="column" type="button">Add Column</button>
+                    <button class="secondary-button compact-action-button" data-board-toolbar-action="card" type="button">Add Card</button>
+                    <button class="secondary-button compact-action-button" data-board-toolbar-action="checklist" type="button">Checklist Card</button>
+                  </div>
+                <div class="toolbar-group toolbar-group-tight">
+                  <button class="secondary-button compact-action-button" data-board-preset="production" type="button">Production</button>
+                  <button class="secondary-button compact-action-button" data-board-preset="sprint" type="button">Sprint</button>
+                  <button class="secondary-button compact-action-button" data-board-preset="review" type="button">Review</button>
+                </div>
+                <div class="toolbar-group toolbar-group-tight">
+                  <button class="secondary-button compact-action-button" data-board-size="1" type="button">1</button>
+                  <button class="secondary-button compact-action-button" data-board-size="2" type="button">2</button>
+                  <button class="secondary-button compact-action-button" data-board-size="3" type="button">3</button>
+                </div>
+                <div class="toolbar-group toolbar-group-tight">
+                  <button class="secondary-button compact-action-button" data-board-view="kanban" type="button">Kanban</button>
+                  <button class="secondary-button compact-action-button" data-board-view="list" type="button">List</button>
+                  <button class="secondary-button compact-action-button" data-board-view="table" type="button">Table</button>
+                </div>
+                <label class="workspace-search board-toolbar-search">
+                  <span>Search</span>
+                  <input id="boardSearchInput" type="search" placeholder="Search cards, owners, labels" />
+                </label>
+                <span id="boardWorkspaceMeta" class="state-badge">0 columns</span>
+              </div>
+              </div>
+
+                  <div id="boardColumns" class="board-columns"></div>
+                </div>
+              </div>
+            </article>
+
+            <article id="storagePanel" class="storage-panel premium-surface motion-static hidden">
+              <div class="storage-workbench">
+                <div class="storage-toolbar">
+                  <div class="storage-toolbar-copy">
+                    <p class="eyebrow">Storage</p>
+                    <h3 id="storageWorkspaceTitle">Universal game file storage</h3>
+                  </div>
+                  <div class="storage-toolbar-actions">
+                    <div class="toolbar-group toolbar-group-tight">
+                      <button id="storageUploadButton" class="secondary-button compact-action-button" type="button">Upload</button>
+                      <button id="storageNewFolderButton" class="secondary-button compact-action-button" type="button">Folder</button>
+                      <button id="storageCategoryButton" class="secondary-button compact-action-button" type="button">Category</button>
+                      <button id="storagePresetButton" class="secondary-button compact-action-button" type="button">Preset</button>
+                    </div>
+                    <div class="toolbar-group toolbar-group-tight">
+                      <button class="secondary-button compact-action-button" data-storage-view="grid" type="button">Grid</button>
+                      <button class="secondary-button compact-action-button" data-storage-view="list" type="button">List</button>
+                      <button class="secondary-button compact-action-button" data-storage-density="compact" type="button">Compact</button>
+                      <button class="secondary-button compact-action-button" data-storage-density="detailed" type="button">Detailed</button>
+                    </div>
+                    <label class="compact-field">
+                      <span>Sort</span>
+                      <select id="storageSortSelect">
+                        <option value="recent">Recent</option>
+                        <option value="name">Name</option>
+                        <option value="size">Size</option>
+                        <option value="type">Type</option>
+                      </select>
+                    </label>
+                    <label class="workspace-search board-toolbar-search">
+                      <span>Search</span>
+                      <input id="storageSearchInput" type="search" placeholder="Search files, tags, folders, projects" />
+                    </label>
+                    <span id="storageWorkspaceMeta" class="state-badge">0 items</span>
+                  </div>
+                </div>
+
+                <div id="storageBreadcrumbs" class="storage-breadcrumbs"></div>
+
+                <div class="storage-layout">
+                  <aside class="storage-sidebar-panel">
+                    <section class="storage-sidebar-section">
+                      <p class="eyebrow">Views</p>
+                      <div id="storageSidebarViews" class="storage-sidebar-stack"></div>
+                    </section>
+                    <section class="storage-sidebar-section">
+                      <p class="eyebrow">Folders</p>
+                      <div id="storageFolderTree" class="storage-folder-tree"></div>
+                    </section>
+                  </aside>
+
+                  <div class="storage-stage">
+                    <div id="storageBulkBar" class="storage-bulk-bar hidden"></div>
+                    <div id="storageFileGrid" class="storage-file-grid" aria-label="Storage browser"></div>
+                  </div>
+
+                  <aside id="storageDetailPanel" class="storage-detail-panel premium-surface"></aside>
+                </div>
+              </div>
+            </article>
+
+            <article id="graphPanel" class="graph-panel premium-surface motion-static hidden">
+              <header class="graph-header">
+                <div>
+                  <p class="eyebrow">Graph View</p>
+                  <h2>Note connections</h2>
+                </div>
+              </header>
+              <svg id="graphView" class="graph-view" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet"></svg>
+            </article>
+          </section>
+
+          <aside id="contextPanel" class="context-panel premium-surface">
+            <div class="context-panel-head">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h3>Document details</h3>
+              </div>
+              <button id="contextPanelCollapseButton" class="secondary-button icon-button" type="button" title="Collapse context panel">x</button>
+            </div>
+            <div id="contextPanelBody" class="context-panel-body">
+              <section class="context-section">
+                <p class="eyebrow">Metadata</p>
+                <div id="contextMeta" class="context-meta-grid"></div>
+              </section>
+              <section id="contextWritingToolsSection" class="context-section">
+                <div class="context-section-head">
+                  <div>
+                    <p class="eyebrow">Writing Tools</p>
+                    <h4>Templates and structure</h4>
+                  </div>
+                  <div id="noteStats" class="note-stats"></div>
+                </div>
+                <div class="note-template-row">
+                  <button class="secondary-button" data-note-template="system" type="button">System Spec</button>
+                  <button class="secondary-button" data-note-template="quest" type="button">Quest</button>
+                  <button class="secondary-button" data-note-template="level" type="button">Level Brief</button>
+                  <button class="secondary-button" data-note-template="narrative" type="button">Narrative Beat</button>
+                  <button class="secondary-button" data-note-template="playtest" type="button">Playtest Review</button>
+                  <button id="removeLatestWritingBlockButton" class="secondary-button" type="button">Remove Latest Block</button>
+                </div>
+                <div id="notePresetGallery" class="note-template-row"></div>
+                <div id="noteSectionPresets" class="note-template-row"></div>
+              </section>
+              <section class="context-section">
+                <p class="eyebrow">Workspace Actions</p>
+                <div id="contextActionGrid" class="note-template-row"></div>
+              </section>
+              <section class="context-section">
+                <p class="eyebrow">Outline</p>
+                <div id="noteOutline" class="note-outline"></div>
+              </section>
+              <section class="context-section">
+                <p class="eyebrow">Linked Items</p>
+                <div id="contextLinks" class="context-links"></div>
+              </section>
+            </div>
+          </aside>
+
+          <footer class="workspace-statusbar premium-surface motion-static">
+            <div id="workspaceStatusPrimary" class="workspace-status-primary">Ready</div>
+            <div id="workspaceStatusSecondary" class="workspace-status-secondary">Ctrl+S save • Ctrl+K switch • Ctrl+F search</div>
+          </footer>
+        </main>
+      </section>
+    </div>
+
+    <input id="imagePicker" type="file" accept="image/*" class="hidden" />
+    <input id="vaultImagePicker" type="file" accept="image/*" class="hidden" />
+    <input id="profileImagePicker" type="file" accept="image/*" class="hidden" />
+    <input id="workspaceImportPicker" type="file" accept="application/json" class="hidden" />
+    <div id="contextMenu" class="context-menu hidden"></div>
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+    <section id="modalPanel" class="modal-panel hidden">
+      <div class="modal-backdrop"></div>
+      <article class="modal-card premium-surface">
+        <div class="modal-header">
+          <div>
+            <p id="modalEyebrow" class="eyebrow">Vault</p>
+            <h2 id="modalTitle">Action</h2>
+          </div>
+          <button id="closeModalButton" class="secondary-button icon-button" type="button">x</button>
+        </div>
+        <p id="modalMessage" class="modal-message"></p>
+        <label id="modalInputWrap" class="modal-input-wrap hidden" for="modalInput">
+          <span class="eyebrow">Name</span>
+          <input id="modalInput" class="modal-input" type="text" />
+        </label>
+        <div class="modal-actions">
+          <button id="modalCancelButton" class="secondary-button" type="button">Cancel</button>
+          <button id="modalConfirmButton" class="primary-button" type="button">Confirm</button>
+        </div>
+      </article>
+    </section>
+
+    <section id="overlayPanel" class="overlay-panel hidden">
+      <div class="overlay-backdrop"></div>
+      <article class="overlay-card premium-surface">
+        <div class="overlay-header">
+          <div>
+            <p id="overlayEyebrow" class="eyebrow">Panel</p>
+            <h2 id="overlayTitle">Software</h2>
+          </div>
+          <button id="closeOverlayButton" class="secondary-button icon-button" type="button">x</button>
+        </div>
+        <div id="overlayBody" class="overlay-body"></div>
+      </article>
+    </section>
+
+    <template id="treeNodeTemplate">
+      <div class="tree-node">
+        <button class="tree-button" type="button"></button>
+      </div>
+    </template>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
