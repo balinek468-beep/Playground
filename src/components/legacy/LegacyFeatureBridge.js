@@ -4079,6 +4079,7 @@ function openMarketComposerForProfile(profileId = null) {
         <span>Tools</span>
         <input id="marketPostToolsInput" class="modal-input" type="text" value="${escapeAttr(tools)}" placeholder="ForgeBook, Roblox Studio, Figma" />
       </label>
+      <p id="marketPostErrorText" class="auth-gate-error hidden"></p>
       <div class="document-card-actions">
         <button id="saveMarketPostButton" class="primary-button" type="button">${existing ? "Update Post" : "Publish Post"}</button>
       </div>
@@ -4086,6 +4087,11 @@ function openMarketComposerForProfile(profileId = null) {
   `;
   on("#saveMarketPostButton", "click", async () => {
     const runtimeUser = activeRuntimeUser();
+    const errorBox = document.querySelector("#marketPostErrorText");
+    if (errorBox) {
+      errorBox.textContent = "";
+      errorBox.classList.add("hidden");
+    }
     if (!runtimeUser?.id) {
       showToast("Sign in required to publish a market post", "warning");
       return;
@@ -4138,7 +4144,14 @@ function openMarketComposerForProfile(profileId = null) {
       showToast(existing ? "Market post updated" : "Market post created");
     } catch (error) {
       console.error("Failed to publish market post", error);
-      showToast("Could not publish market post", "warning");
+      const details = [error?.message, error?.details, error?.hint, error?.code]
+        .filter(Boolean)
+        .join(" | ");
+      if (errorBox) {
+        errorBox.textContent = details || "Could not publish market post";
+        errorBox.classList.remove("hidden");
+      }
+      showToast(details || "Could not publish market post", "warning");
     }
   });
 }
