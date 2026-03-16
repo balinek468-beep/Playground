@@ -1645,8 +1645,18 @@ function clearLibraryCategoryDropTargets() {
   document.querySelectorAll(".library-category-section.is-drop-target, .library-tree-heading.is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
 }
 
-function updateLibraryAutoScroll(clientY) {
-  const scroller = document.querySelector(".library-grid");
+function findLibraryScrollContainer(target) {
+  const candidates = [
+    target?.closest?.("#documentCards"),
+    target?.closest?.(".library-main"),
+    target?.closest?.(".library-grid"),
+    document.scrollingElement,
+  ].filter(Boolean);
+  return candidates.find((node) => node.scrollHeight > node.clientHeight + 4) || document.scrollingElement;
+}
+
+function updateLibraryAutoScroll(clientY, target = null) {
+  const scroller = findLibraryScrollContainer(target || document.elementFromPoint(window.innerWidth / 2, clientY));
   if (!scroller) return;
   const rect = scroller.getBoundingClientRect();
   const edge = 96;
@@ -1687,7 +1697,7 @@ function stopLibraryAutoScroll() {
 
 function handleGlobalLibraryVaultDragOver(event) {
   if (!draggedVaultId) return;
-  updateLibraryAutoScroll(event.clientY);
+  updateLibraryAutoScroll(event.clientY, event.target);
 }
 
 function handleGlobalLibraryVaultDragStop() {
