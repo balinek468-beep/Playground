@@ -38,8 +38,8 @@ export async function signOut() {
 export function onAuthStateChange(callback) {
   const client = getSupabaseClient();
   if (!client) return () => {};
-  const { data } = client.auth.onAuthStateChange((_event, session) => {
-    callback(session);
+  const { data } = client.auth.onAuthStateChange((event, session) => {
+    callback(event, session);
   });
   return () => data.subscription.unsubscribe();
 }

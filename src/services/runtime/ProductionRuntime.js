@@ -6,6 +6,9 @@ import { fetchMarketplaceProfiles } from "../database/MarketplaceRepository.js";
 import { ensureProfile } from "../database/ProfileRepository.js";
 import { fetchWorkspaceSnapshot, persistWorkspaceSnapshot } from "../database/WorkspaceRepository.js";
 
+const AUTH_RESTORE_STORAGE_KEY = "forgebook.auth.restore";
+const AUTH_RESTORE_WINDOW_MS = 1000 * 60 * 60 * 24 * 14;
+
 export async function initProductionRuntime({ createBaseStateSnapshot }) {
   let queuedSnapshot = null;
   let lastPersistedSnapshot = null;
@@ -13,6 +16,37 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   let activeAuthUserId = null;
   let authTransitionInFlight = false;
   let authGateTimer = null;
+
+  const rememberAuthUser = (userId) => {
+    if (!userId) return;
+    try {
+      localStorage.setItem(
+        AUTH_RESTORE_STORAGE_KEY,
+        JSON.stringify({
+          userId,
+          timestamp: Date.now(),
+        }),
+      );
+    } catch {}
+  };
+
+  const clearRememberedAuthUser = () => {
+    try {
+      localStorage.removeItem(AUTH_RESTORE_STORAGE_KEY);
+    } catch {}
+  };
+
+  const hasRecentRememberedAuthUser = () => {
+    try {
+      const raw = localStorage.getItem(AUTH_RESTORE_STORAGE_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.userId || !parsed?.timestamp) return false;
+      return Date.now() - Number(parsed.timestamp) < AUTH_RESTORE_WINDOW_MS;
+    } catch {
+      return false;
+    }
+  };
 
   const clearAuthGateTimer = () => {
     if (!authGateTimer) return;
@@ -23,13 +57,18 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   const scheduleAuthGateMount = (runtime) => {
     clearAuthGateTimer();
     authGateTimer = window.setTimeout(async () => {
-      const { session: recoveredSession, user: recoveredUser } = await getSession();
-      runtime.auth.session = recoveredSession;
-      runtime.auth.user = recoveredUser;
-      if (recoveredUser) {
-        activeAuthUserId = recoveredUser.id;
-        unmountAuthGate();
-        return;
+      const deadline = Date.now() + (hasRecentRememberedAuthUser() ? 4500 : 1200);
+      while (Date.now() < deadline) {
+        const { session: recoveredSession, user: recoveredUser } = await getSession();
+        runtime.auth.session = recoveredSession;
+        runtime.auth.user = recoveredUser;
+        if (recoveredUser) {
+          activeAuthUserId = recoveredUser.id;
+          rememberAuthUser(recoveredUser.id);
+          unmountAuthGate();
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
       mountAuthGate(runtime);
     }, 900);
@@ -91,6 +130,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   runtime.auth.session = session;
   runtime.auth.user = user;
   activeAuthUserId = user?.id || null;
+  if (user?.id) rememberAuthUser(user.id);
 
   if (user) {
     await ensureProfile(user, createBaseStateSnapshot().profile);
@@ -117,13 +157,14 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     scheduleAuthGateMount(runtime);
   }
 
-  runtime.unsubscribeAuth = onAuthStateChange(async (nextSession) => {
+  runtime.unsubscribeAuth = onAuthStateChange(async (event, nextSession) => {
     runtime.auth.session = nextSession;
     runtime.auth.user = nextSession?.user || null;
     const nextUserId = nextSession?.user?.id || null;
     if (authTransitionInFlight) return;
     if (ENV.requireAuth && nextSession?.user) {
       clearAuthGateTimer();
+      rememberAuthUser(nextUserId);
       if (activeAuthUserId === nextUserId) {
         unmountAuthGate();
         return;
@@ -142,6 +183,9 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }
     if (ENV.requireAuth && !nextSession?.user) {
       activeAuthUserId = null;
+      if (event === "SIGNED_OUT") {
+        clearRememberedAuthUser();
+      }
       scheduleAuthGateMount(runtime);
     }
   });
