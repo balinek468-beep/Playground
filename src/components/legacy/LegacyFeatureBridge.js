@@ -24,6 +24,7 @@ import {
 } from "../../data/workspacePresets.js";
 import { ensureMarketPage } from "../market/MarketPage.js";
 import { renderSettingsPage } from "../settings/SettingsPage.js";
+import { filterLegacyMockMarketProfiles } from "../../utils/marketProfiles.js";
 import { collectLegacyElements } from "./LegacyViewMount.js";
 import { createCanvasRuntime } from "../../features/canvas/canvasRuntime.js";
 
@@ -201,7 +202,7 @@ if (runtimeUser) {
   }
 }
 if (Array.isArray(window.ForgeBookRuntime?.data?.marketProfiles) && window.ForgeBookRuntime.data.marketProfiles.length) {
-  state.marketProfiles = window.ForgeBookRuntime.data.marketProfiles.map((profile) => ({
+  state.marketProfiles = filterLegacyMockMarketProfiles(window.ForgeBookRuntime.data.marketProfiles).map((profile) => ({
     id: profile.id,
     userId: profile.user_id || profile.userId || profile.id,
     nickname: profile.nickname || profile.display_name || "Developer",

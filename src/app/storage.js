@@ -7,6 +7,7 @@ import {
   randomUserId,
   uid,
 } from "./state.js";
+import { filterLegacyMockMarketProfiles } from "../utils/marketProfiles.js";
 
 export function scoreWorkspaceSnapshot(next) {
   return (
@@ -58,7 +59,7 @@ export function parseWorkspaceCandidate(raw) {
     };
     next.marketProfiles =
       Array.isArray(parsed.marketProfiles) && parsed.marketProfiles.length
-        ? parsed.marketProfiles.map((entry) => ({
+        ? filterLegacyMockMarketProfiles(parsed.marketProfiles).map((entry) => ({
             ...entry,
             id: entry.id || uid(),
             userId: entry.userId || randomUserId(),

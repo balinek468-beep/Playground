@@ -1,4 +1,5 @@
 import { ENV } from "../../constants/env.js";
+import { filterLegacyMockMarketProfiles } from "../../utils/marketProfiles.js";
 import { getSupabaseClient } from "../auth/supabaseClient.js";
 
 export async function fetchMarketplaceProfiles() {
@@ -9,7 +10,7 @@ export async function fetchMarketplaceProfiles() {
     .select("*")
     .order("updated_at", { ascending: false });
   if (error) throw error;
-  return data || [];
+  return filterLegacyMockMarketProfiles(data || []);
 }
 
 export async function upsertMarketplaceProfile(profile) {
