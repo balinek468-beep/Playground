@@ -733,12 +733,19 @@ function renderChrome() {
   document.body.dataset.highContrast = state.settings.appearance?.highContrastMode ? "true" : "false";
   document.body.dataset.reducedMotion = state.settings.appearance?.reducedMotion || state.settings.accessibility?.reducedMotion ? "true" : "false";
   const root = document.documentElement;
-  root.style.setProperty("--forge-accent", state.settings.appearance?.accentColor || "#8b5cf6");
-  root.style.setProperty("--forge-accent-from", state.settings.appearance?.accentGradientFrom || "#8b5cf6");
-  root.style.setProperty("--forge-accent-to", state.settings.appearance?.accentGradientTo || "#38bdf8");
-  root.style.setProperty("--forge-panel-opacity", String(state.settings.appearance?.panelTransparency ?? 0.84));
-  root.style.setProperty("--forge-blur-strength", `${Number(state.settings.appearance?.glassBlurStrength ?? 18)}px`);
-  root.style.setProperty("--forge-shadow-alpha", String(state.settings.appearance?.shadowIntensity ?? 0.34));
+  const accentColor = state.settings.appearance?.accentColor || "#8b5cf6";
+  const accentFrom = state.settings.appearance?.accentGradientFrom || accentColor;
+  const accentTo = state.settings.appearance?.accentGradientTo || "#38bdf8";
+  const panelOpacity = clampNumber(Number(state.settings.appearance?.panelTransparency ?? 0.84), 0.55, 1);
+  const blurStrength = clampNumber(Number(state.settings.appearance?.glassBlurStrength ?? 18), 0, 32);
+  const shadowIntensity = clampNumber(Number(state.settings.appearance?.shadowIntensity ?? 0.34), 0, 1);
+  const borderGlowStrength = clampNumber(Number(state.settings.appearance?.borderGlowStrength ?? 0.24), 0, 1);
+  root.style.setProperty("--forge-accent", accentColor);
+  root.style.setProperty("--forge-accent-from", accentFrom);
+  root.style.setProperty("--forge-accent-to", accentTo);
+  root.style.setProperty("--forge-panel-opacity", String(panelOpacity));
+  root.style.setProperty("--forge-blur-strength", `${blurStrength}px`);
+  root.style.setProperty("--forge-shadow-alpha", String(shadowIntensity));
   root.style.setProperty("--forge-panel-radius", `${Number(state.settings.appearance?.cornerRoundness ?? 18)}px`);
   root.style.setProperty("--forge-ui-scale", String(state.settings.appearance?.uiScale ?? 1));
   root.style.setProperty("--forge-font-scale", String(state.settings.appearance?.fontScale ?? 1));
@@ -748,6 +755,20 @@ function renderChrome() {
   root.style.setProperty("--forge-text-scale", String(state.settings.accessibility?.textScaling ?? 1));
   root.style.setProperty("--forge-sidebar-width", `${Number(state.settings.workspace?.sidebarWidth ?? 280)}px`);
   root.style.setProperty("--forge-board-column-width", `${Number(state.settings.boards?.columnWidth ?? 380)}px`);
+  root.style.setProperty("--accent", accentColor);
+  root.style.setProperty("--accent-2", accentTo);
+  root.style.setProperty("--accent-3", accentFrom);
+  root.style.setProperty("--bg-panel", `rgba(23, 27, 36, ${panelOpacity})`);
+  root.style.setProperty("--bg-panel-2", `rgba(30, 35, 46, ${Math.min(panelOpacity + 0.04, 1)})`);
+  root.style.setProperty("--shadow", `0 20px 60px rgba(0, 0, 0, ${Math.max(0.12, shadowIntensity * 0.95)})`);
+  root.style.setProperty(
+    "--glow",
+    `0 0 0 1px ${rgbaString(accentColor, 0.12 + borderGlowStrength * 0.22)}, 0 18px 40px ${rgbaString(accentColor, 0.08 + shadowIntensity * 0.24)}`,
+  );
+  root.style.setProperty(
+    "--glow-strong",
+    `0 0 0 1px ${rgbaString(accentColor, 0.18 + borderGlowStrength * 0.3)}, 0 24px 60px ${rgbaString(accentColor, 0.12 + shadowIntensity * 0.28)}, 0 0 120px ${rgbaString(accentTo, 0.04 + borderGlowStrength * 0.12)}`,
+  );
   root.dataset.layoutDensity = state.settings.appearance?.layoutDensity || "comfortable";
   root.dataset.workspaceLayout = state.settings.workspace?.activeLayout || "writer";
   if (els.libraryView) els.libraryView.classList.toggle("hidden", state.activeView !== "library");
@@ -6843,6 +6864,22 @@ function stopSheetResize() {
 
 function clampNumber(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hexToRgb(hex) {
+  const normalized = String(hex || "").trim().replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function rgbaString(hex, alpha) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return `rgba(139, 92, 246, ${alpha})`;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
 function sheetColumnLabel(index) {

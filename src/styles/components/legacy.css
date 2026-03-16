@@ -45,6 +45,7 @@ body {
     radial-gradient(circle at 50% 120%, rgba(86, 183, 255, 0.08), transparent 22%),
     linear-gradient(180deg, #0a0c11 0%, #10131a 52%, #0b0d12 100%);
   background-attachment: fixed;
+  font-size: calc(16px * var(--forge-font-scale, 1));
 }
 
 body[data-glow-mode="soft"] {
@@ -165,7 +166,8 @@ input {
   background: var(--bg-panel);
   border: 1px solid var(--line-soft);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(var(--forge-blur-strength, 18px));
+  border-radius: var(--forge-panel-radius, 14px);
 }
 
 .library-header,
@@ -4156,7 +4158,11 @@ input {
 .context-panel,
 .overlay-card,
 .modal-card {
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(calc(var(--forge-blur-strength, 18px) * 0.7));
+}
+
+.app-shell {
+  zoom: var(--forge-ui-scale, 1);
 }
 
 .workspace-view {
