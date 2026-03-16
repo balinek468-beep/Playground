@@ -2402,6 +2402,7 @@ input {
   background-size: cover;
   background-position: center;
   position: relative;
+  overflow: visible;
 }
 
 .profile-banner-action {
@@ -2416,7 +2417,9 @@ input {
   gap: 18px;
   align-items: end;
   padding: 0 20px 20px;
-  margin-top: -54px;
+  margin-top: -88px;
+  position: relative;
+  z-index: 2;
 }
 
 .profile-avatar,
@@ -2436,6 +2439,8 @@ input {
   box-shadow: 0 18px 44px rgba(5, 10, 20, 0.36);
   font-size: 2.2rem;
   font-weight: 800;
+  position: relative;
+  z-index: 3;
 }
 
 .profile-avatar img,
@@ -2451,6 +2456,7 @@ input {
   gap: 10px;
   align-content: end;
   min-width: 0;
+  padding-bottom: 14px;
 }
 
 .profile-title-row {
@@ -2464,12 +2470,14 @@ input {
 .profile-title-row h3 {
   margin: 0;
   font-size: 1.8rem;
+  text-shadow: 0 6px 24px rgba(6, 10, 20, 0.65);
 }
 
 .profile-title-row p,
 .profile-bio-preview {
   margin: 4px 0 0;
   color: var(--muted);
+  text-shadow: 0 6px 24px rgba(6, 10, 20, 0.55);
 }
 
 .profile-main-grid {
@@ -5176,7 +5184,7 @@ input {
   .profile-hero {
     grid-template-columns: 1fr;
     align-items: start;
-    margin-top: -36px;
+    margin-top: -52px;
   }
 
   .overlay-card.overlay-card-profile,
