@@ -10,7 +10,26 @@ export async function fetchMarketplaceProfiles() {
     .select("*")
     .order("updated_at", { ascending: false });
   if (error) throw error;
-  return filterLegacyMockMarketProfiles(data || []);
+  const profiles = filterLegacyMockMarketProfiles(data || []);
+  const userIds = [...new Set(profiles.map((entry) => entry.user_id).filter(Boolean))];
+  if (!userIds.length) return profiles;
+  const { data: profileRows, error: profileError } = await client
+    .from(ENV.profileTable)
+    .select("id, nickname, avatar_url, banner_url, profile_url, availability_status")
+    .in("id", userIds);
+  if (profileError) throw profileError;
+  const profileMap = new Map((profileRows || []).map((entry) => [entry.id, entry]));
+  return profiles.map((entry) => {
+    const profile = profileMap.get(entry.user_id);
+    return {
+      ...entry,
+      profile_url: profile?.profile_url || entry.profile_url || "",
+      avatar_url: entry.avatar_url || profile?.avatar_url || "",
+      banner_url: entry.banner_url || profile?.banner_url || "",
+      nickname: entry.nickname || profile?.nickname || "Developer",
+      availability_status: entry.availability_status || profile?.availability_status || "Open to offers",
+    };
+  });
 }
 
 export async function upsertMarketplaceProfile(profile) {

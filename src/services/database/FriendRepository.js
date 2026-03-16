@@ -66,14 +66,38 @@ export async function sendFriendRequest(senderId, receiverId) {
   const client = getSupabaseClient();
   if (!client || !senderId || !receiverId || senderId === receiverId) return null;
 
+  const { data: existingFriendship } = await client
+    .from("friendships")
+    .select("id")
+    .eq("user_id", senderId)
+    .eq("friend_id", receiverId)
+    .maybeSingle();
+  if (existingFriendship) {
+    return {
+      id: existingFriendship.id,
+      status: "accepted",
+      sender_id: senderId,
+      receiver_id: receiverId,
+    };
+  }
+
   const { data: existing } = await client
     .from("friend_requests")
-    .select("id, status")
-    .eq("sender_id", senderId)
-    .eq("receiver_id", receiverId)
-    .maybeSingle();
+    .select("id, status, sender_id, receiver_id")
+    .or(`and(sender_id.eq.${senderId},receiver_id.eq.${receiverId}),and(sender_id.eq.${receiverId},receiver_id.eq.${senderId})`);
 
-  if (existing?.status === "pending") return existing;
+  const sameDirection = (existing || []).find((entry) => entry.sender_id === senderId && entry.receiver_id === receiverId);
+  if (sameDirection?.status === "pending") return sameDirection;
+
+  const reversePending = (existing || []).find((entry) => entry.sender_id === receiverId && entry.receiver_id === senderId && entry.status === "pending");
+  if (reversePending) {
+    await acceptFriendRequest(reversePending.id, senderId);
+    return {
+      ...reversePending,
+      status: "accepted",
+      autoAccepted: true,
+    };
+  }
 
   const payload = {
     sender_id: senderId,

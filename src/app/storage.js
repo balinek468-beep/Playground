@@ -51,11 +51,15 @@ export function parseWorkspaceCandidate(raw) {
     next.softwareName = parsed.softwareName || next.softwareName;
     next.profile = { ...next.profile, ...(parsed.profile || {}) };
     if (!next.profile.userId) next.profile.userId = randomUserId();
+    if (!next.profile.accountId) next.profile.accountId = "";
+    if (!next.profile.publicId) next.profile.publicId = "";
     if (!Array.isArray(next.profile.friends)) next.profile.friends = [];
     if (!Array.isArray(next.profile.sentRequests)) next.profile.sentRequests = [];
     next.social = {
       conversations: Array.isArray(parsed.social?.conversations) ? parsed.social.conversations : [],
       activeConversationId: parsed.social?.activeConversationId || null,
+      directory: Array.isArray(parsed.social?.directory) ? parsed.social.directory : [],
+      categories: Array.isArray(parsed.social?.categories) ? parsed.social.categories : [],
     };
     next.marketProfiles =
       Array.isArray(parsed.marketProfiles) && parsed.marketProfiles.length

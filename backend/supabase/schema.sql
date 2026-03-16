@@ -453,6 +453,7 @@ create index if not exists idx_conversation_members_user on public.conversation_
 create index if not exists idx_messages_conversation_created on public.messages(conversation_id, created_at desc);
 create index if not exists idx_notifications_user_type_created on public.notifications(user_id, type, created_at desc);
 create index if not exists idx_notifications_user_unread on public.notifications(user_id, read_at, created_at desc);
+create unique index if not exists idx_profiles_profile_url_unique on public.profiles(profile_url) where profile_url is not null;
 create index if not exists idx_marketplace_role_availability on public.marketplace_profiles(role, availability_status, updated_at desc);
 create index if not exists idx_marketplace_experience on public.marketplace_profiles(experience_level, updated_at desc);
 create index if not exists idx_marketplace_tags_gin on public.marketplace_profiles using gin(tags);

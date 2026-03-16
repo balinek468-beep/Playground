@@ -404,6 +404,8 @@ export function createDefaultStateSnapshot() {
     profile: {
       name: "You",
       userId: randomUserId(),
+      accountId: "",
+      publicId: "",
       bio: "Game designer building worlds, systems, and production pipelines.",
       tagline: "Design discipline beats chaos.",
       role: "Creative Director",
@@ -425,6 +427,7 @@ export function createDefaultStateSnapshot() {
     social: {
       conversations: [],
       activeConversationId: null,
+      directory: [],
       categories: [
         { id: "general", name: "General" },
         { id: "team", name: "Team" },

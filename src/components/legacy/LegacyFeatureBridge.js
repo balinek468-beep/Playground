@@ -34,6 +34,12 @@ import {
   sendFriendRequest,
 } from "../../services/database/FriendRepository.js";
 import { fetchProfileByPublicId } from "../../services/database/ProfileRepository.js";
+import {
+  appendConversationMessage,
+  createGroupConversationRecord,
+  ensureDirectConversationRecord,
+  fetchConversationNetwork,
+} from "../../services/database/ConversationRepository.js";
 import { collectLegacyElements } from "./LegacyViewMount.js";
 import { createCanvasRuntime } from "../../features/canvas/canvasRuntime.js";
 
@@ -206,6 +212,7 @@ const runtimeUser = window.ForgeBookRuntime?.auth?.user;
 const runtimeProfile = window.ForgeBookRuntime?.data?.profile;
 if (runtimeUser) {
   state.profile.userId = runtimeUser.id;
+  state.profile.accountId = runtimeUser.id;
   if (runtimeUser.email && !state.profile.email) state.profile.email = runtimeUser.email;
   if (runtimeUser.user_metadata?.name && (!state.profile.name || state.profile.name === "You")) {
     state.profile.name = runtimeUser.user_metadata.name;
@@ -255,6 +262,7 @@ let friendsSearch = "";
 let marketReturnView = "library";
 let marketRefreshPromise = null;
 let friendRefreshPromise = null;
+let conversationRefreshPromise = null;
 
 const on = (selector, event, handler) => {
   const node = $(selector);
@@ -288,6 +296,9 @@ if (activeRuntimeUser()?.id) {
     .catch(() => null);
   Promise.resolve()
     .then(() => refreshFriendStateFromCloud())
+    .catch(() => null);
+  Promise.resolve()
+    .then(() => refreshConversationsFromCloud())
     .catch(() => null);
 }
 
@@ -1834,6 +1845,9 @@ function handleVaultRootDragOver(event) {
 
 function renderMarket() {
   if (!els.marketCards) return;
+  if (activeRuntimeUser()?.id && !(state.marketProfiles || []).length) {
+    void refreshMarketProfilesFromCloud({ rerender: true });
+  }
   const profiles = Array.isArray(state.marketProfiles) ? state.marketProfiles : [];
   const filtered = profiles.filter((profile) => {
     const matchesSearch = !marketSearch || [profile.nickname, profile.displayName, profile.role, ...(profile.tags || [])]
@@ -1850,7 +1864,7 @@ function renderMarket() {
   if (els.marketOpenCount) els.marketOpenCount.textContent = String(filtered.filter((profile) => profile.availability === "Open to offers").length);
   els.marketCards.innerHTML = "";
   filtered.forEach((profile) => {
-    const isOwnPost = profile.userId === state.profile.userId;
+    const isOwnPost = profile.userId === currentAccountId();
     const card = document.createElement("article");
     card.className = "market-card premium-surface";
     card.innerHTML = `
@@ -1918,7 +1932,7 @@ function renderMarket() {
 function openMarketProfile(profileId) {
   const profile = (state.marketProfiles || []).find((entry) => entry.id === profileId);
   if (!profile || !els.overlayBody || !els.overlayEyebrow || !els.overlayTitle) return;
-  const isOwnPost = profile.userId === state.profile.userId;
+  const isOwnPost = profile.userId === currentAccountId();
   els.overlayCard?.classList.remove("overlay-card-chat", "overlay-card-profile");
   els.overlayCard?.classList.add("overlay-card-market");
   els.overlayPanel?.classList.remove("hidden");
@@ -3187,6 +3201,7 @@ function openOverlay(mode) {
     return;
   }
   if (mode === "friends") {
+    if (activeRuntimeUser()?.id) void refreshFriendStateFromCloud({ rerender: false });
     renderFriendsOverlay();
     return;
   }
@@ -3463,6 +3478,7 @@ function openOverlay(mode) {
     return;
   }
   if (mode === "messages") {
+    if (activeRuntimeUser()?.id) void refreshConversationsFromCloud({ rerender: false });
     renderMessagesOverlay();
     return;
   }
@@ -4372,8 +4388,7 @@ function legacyRenderFriendRows() {
   }
   document.querySelectorAll("[data-friend-message]").forEach((button) => {
     button.addEventListener("click", () => {
-      openDirectMessage(button.dataset.friendMessage);
-      openOverlay("messages");
+      openDirectMessage(button.dataset.friendMessage).finally(() => openOverlay("messages"));
     });
   });
   document.querySelectorAll("[data-friend-remove]").forEach((button) => {
@@ -4533,7 +4548,7 @@ function openFriendProfileOverlay(profileId, source = "friends") {
           console.error("Failed to accept pending request before opening DM", error);
         }
       }
-      openDirectMessage(button.dataset.friendProfileMessage);
+      await openDirectMessage(button.dataset.friendProfileMessage);
       openOverlay("messages");
     });
   });
@@ -4710,6 +4725,7 @@ function addMarketProfileAsFriend(profileId, openMessage = false) {
 }
 
 function renderFriendsOverlay() {
+  if (activeRuntimeUser()?.id) void refreshFriendStateFromCloud({ rerender: true });
   els.overlayCard?.classList.remove("overlay-card-profile", "overlay-card-market");
   els.overlayCard?.classList.add("overlay-card-chat");
   els.overlayEyebrow.textContent = "Friends";
@@ -4830,7 +4846,7 @@ function renderFriendRows() {
   if (requestHost) requestHost.innerHTML = "";
   const filteredFriends = (state.profile.friends || []).filter((friend) => {
     if (!friendsSearch) return true;
-    return [friend.name, friend.role, friend.userId].join(" ").toLowerCase().includes(friendsSearch);
+    return [friend.name, friend.role, friend.publicId, friend.userId].join(" ").toLowerCase().includes(friendsSearch);
   });
   if (friendsTab === "friends") filteredFriends.forEach((friend) => {
     const row = document.createElement("article");
@@ -5272,24 +5288,42 @@ function pushNotification(type, title, body, meta = {}) {
 }
 
 function socialProfileById(userId) {
-  if (userId === state.profile.userId) {
+  if (userId === currentAccountId()) {
     return {
       id: "self",
-      userId: state.profile.userId,
+      userId: currentAccountId(),
+      accountId: currentAccountId(),
+      publicId: currentPublicProfileId(),
       name: state.profile.name,
       role: state.profile.role || "Designer",
       status: state.profile.status || "Available",
       avatar: state.profile.avatar || "",
     };
   }
-  return (state.profile.friends || []).find((friend) => friend.userId === userId || friend.id === userId) || null;
+  return (
+    (state.profile.friends || []).find((friend) => friend.accountId === userId || friend.userId === userId || friend.id === userId)
+    || (state.social.directory || []).find((friend) => friend.accountId === userId || friend.userId === userId || friend.id === userId)
+    || null
+  );
 }
 
-function ensureDirectConversation(friendId) {
-  const friend = (state.profile.friends || []).find((entry) => entry.id === friendId || entry.userId === friendId);
+async function ensureDirectConversation(friendId) {
+  const friend = (state.profile.friends || []).find((entry) =>
+    entry.id === friendId || entry.userId === friendId || entry.accountId === friendId);
   if (!friend) return null;
-  const memberIds = [state.profile.userId, friend.userId].sort();
+  const selfAccountId = currentAccountId();
+  const friendAccountId = friend.accountId || friend.userId;
+  const memberIds = [selfAccountId, friendAccountId].filter(Boolean).sort();
   let conversation = state.social.conversations.find((entry) => entry.type === "direct" && [...entry.memberIds].sort().join("|") === memberIds.join("|"));
+  if (!conversation && activeRuntimeUser()?.id && friendAccountId) {
+    await ensureDirectConversationRecord({
+      userId: selfAccountId,
+      friendId: friendAccountId,
+      fallbackName: friend.name,
+    });
+    await refreshConversationsFromCloud({ rerender: false });
+    conversation = state.social.conversations.find((entry) => entry.type === "direct" && [...entry.memberIds].sort().join("|") === memberIds.join("|"));
+  }
   if (!conversation) {
     conversation = {
       id: uid(),
@@ -5300,7 +5334,7 @@ function ensureDirectConversation(friendId) {
       messages: [
         {
           id: uid(),
-          authorId: friend.userId,
+          authorId: friendAccountId,
           content: `Opened a direct line with ${state.profile.name}.`,
           createdAt: Date.now(),
         },
@@ -5314,17 +5348,20 @@ function ensureDirectConversation(friendId) {
 }
 
 function openDirectMessage(friendId) {
-  ensureDirectConversation(friendId);
+  return ensureDirectConversation(friendId);
 }
 
 function renderMessagesOverlay() {
   normalize();
   if (!els.overlayBody) return;
+  if (activeRuntimeUser()?.id && !(state.social.conversations || []).length) {
+    void refreshConversationsFromCloud({ rerender: true });
+  }
   els.overlayCard?.classList.remove("overlay-card-profile", "overlay-card-market");
   els.overlayCard?.classList.add("overlay-card-chat");
   if (!state.social.activeConversationId) {
     const firstFriend = state.profile.friends?.[0];
-    if (firstFriend) ensureDirectConversation(firstFriend.id);
+    if (firstFriend) void ensureDirectConversation(firstFriend.id);
   }
   const conversation = state.social.conversations.find((entry) => entry.id === state.social.activeConversationId) || state.social.conversations[0] || null;
   if (conversation && !state.social.activeConversationId) state.social.activeConversationId = conversation.id;
@@ -5412,15 +5449,14 @@ function bindMessagesOverlay() {
   on("#newDirectChatButton", "click", () => {
     const matches = (state.profile.friends || []).filter((friend) => {
       const query = ($("#chatSearchInput")?.value || "").trim().toLowerCase();
-      return !query || [friend.name, friend.role, friend.userId].join(" ").toLowerCase().includes(query);
+      return !query || [friend.name, friend.role, friend.publicId, friend.userId].join(" ").toLowerCase().includes(query);
     });
     const firstFriend = matches[0] || state.profile.friends?.[0];
     if (!firstFriend) {
       showToast("Add a friend first");
       return;
     }
-    ensureDirectConversation(firstFriend.id);
-    renderMessagesOverlay();
+    openDirectMessage(firstFriend.id).then(() => renderMessagesOverlay());
   });
   on("#newTeamChatButton", "click", () => {
     if (!(state.profile.friends || []).length) {
@@ -5436,25 +5472,40 @@ function bindMessagesOverlay() {
       onConfirm: (value) => {
         const name = value.trim();
         if (!name) return false;
-        const members = [state.profile.userId, ...(state.profile.friends || []).slice(0, 4).map((friend) => friend.userId)];
-        state.social.conversations.unshift({
-          id: uid(),
-          type: "group",
-          name,
-          categoryId: "team",
-          memberIds: members,
-          messages: [{
-            id: uid(),
-            authorId: state.profile.userId,
-            content: `Created ${name}.`,
-            createdAt: Date.now(),
-          }],
+        const members = (state.profile.friends || []).slice(0, 4).map((friend) => friend.accountId || friend.userId).filter(Boolean);
+        const runtimeUser = activeRuntimeUser();
+        const finalize = async () => {
+          if (runtimeUser?.id) {
+            await createGroupConversationRecord({
+              userId: runtimeUser.id,
+              name,
+              memberIds: members,
+            });
+            await refreshConversationsFromCloud({ rerender: false });
+          } else {
+            state.social.conversations.unshift({
+              id: uid(),
+              type: "group",
+              name,
+              categoryId: "team",
+              memberIds: [currentAccountId(), ...members],
+              messages: [{
+                id: uid(),
+                authorId: currentAccountId(),
+                content: `Created ${name}.`,
+                createdAt: Date.now(),
+              }],
+            });
+          }
+          state.social.activeConversationId = state.social.conversations[0]?.id || state.social.activeConversationId;
+          save();
+          renderMessagesOverlay();
+          showToast("Team chat created");
+        };
+        finalize().catch((error) => {
+          console.error("Failed to create team chat", error);
+          showToast("Could not create team chat", "warning");
         });
-        state.social.activeConversationId = state.social.conversations[0].id;
-        save();
-        pushNotification("message", "Team chat created", `${name} is ready for collaboration.`);
-        renderMessagesOverlay();
-        showToast("Team chat created");
         return true;
       },
     });
@@ -5544,8 +5595,8 @@ function renderConversationList() {
     });
   });
   const quickFriends = (state.profile.friends || [])
-    .filter((friend) => !query || [friend.name, friend.role, friend.userId].join(" ").toLowerCase().includes(query))
-    .filter((friend) => !state.social.conversations.some((entry) => entry.type === "direct" && entry.memberIds.includes(friend.userId)))
+    .filter((friend) => !query || [friend.name, friend.role, friend.publicId, friend.userId].join(" ").toLowerCase().includes(query))
+    .filter((friend) => !state.social.conversations.some((entry) => entry.type === "direct" && entry.memberIds.includes(friend.accountId || friend.userId)))
     .slice(0, 6);
   if (quickFriends.length) {
     const label = document.createElement("div");
@@ -5564,8 +5615,7 @@ function renderConversationList() {
         </div>
       `;
       button.addEventListener("click", () => {
-        ensureDirectConversation(friend.id);
-        renderMessagesOverlay();
+        openDirectMessage(friend.id).then(() => renderMessagesOverlay());
       });
       host.appendChild(button);
     });
@@ -5632,31 +5682,68 @@ function sendConversationMessage() {
   if (!input || !conversation) return;
   const content = input.value.trim();
   if (!content) return;
-  conversation.messages.push({
-    id: uid(),
-    authorId: state.profile.userId,
+  const runtimeUser = activeRuntimeUser();
+  const appendLocalMessage = (messageId = uid(), createdAt = Date.now()) => {
+    conversation.messages.push({
+      id: messageId,
+      authorId: currentAccountId(),
+      content,
+      createdAt,
+    });
+    input.value = "";
+    save();
+    renderConversationList();
+    renderConversationFeed();
+  };
+  if (!runtimeUser?.id) {
+    appendLocalMessage();
+    return;
+  }
+  appendConversationMessage({
+    conversationId: conversation.id,
+    authorId: runtimeUser.id,
     content,
-    createdAt: Date.now(),
-  });
-  input.value = "";
-  save();
-  pushNotification("message", `Message sent to ${conversation.name}`, content.slice(0, 72));
-  renderConversationList();
-  renderConversationFeed();
+  })
+    .then((message) => {
+      appendLocalMessage(
+        message?.id || uid(),
+        message?.created_at ? new Date(message.created_at).getTime() : Date.now(),
+      );
+      void refreshConversationsFromCloud({ rerender: false });
+    })
+    .catch((error) => {
+      console.error("Failed to send message", error);
+      showToast("Could not send message", "warning");
+    });
 }
 
 function sendQuickSystemMessage() {
   const conversation = activeConversation();
   if (!conversation) return;
-  conversation.messages.push({
-    id: uid(),
-    authorId: state.profile.userId,
-    content: conversation.type === "group" ? "Posted an update for the team." : "Sent a quick follow-up.",
-    createdAt: Date.now(),
-  });
-  save();
-  renderConversationList();
-  renderConversationFeed();
+  const content = conversation.type === "group" ? "Posted an update for the team." : "Sent a quick follow-up.";
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) {
+    conversation.messages.push({
+      id: uid(),
+      authorId: currentAccountId(),
+      content,
+      createdAt: Date.now(),
+    });
+    save();
+    renderConversationList();
+    renderConversationFeed();
+    return;
+  }
+  appendConversationMessage({
+    conversationId: conversation.id,
+    authorId: runtimeUser.id,
+    content,
+  })
+    .then(() => refreshConversationsFromCloud({ rerender: true }))
+    .catch((error) => {
+      console.error("Failed to send quick update", error);
+      showToast("Could not send update", "warning");
+    });
 }
 
 function shareActiveFileToConversation() {
@@ -5666,16 +5753,30 @@ function shareActiveFileToConversation() {
     showToast("Open a file first");
     return;
   }
-  conversation.messages.push({
-    id: uid(),
-    authorId: state.profile.userId,
-    content: `Shared file: ${doc.name} (${doc.docType})`,
-    createdAt: Date.now(),
-  });
-  save();
-  pushNotification("share", "File shared in chat", doc.name);
-  renderConversationList();
-  renderConversationFeed();
+  const content = `Shared file: ${doc.name} (${doc.docType})`;
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) {
+    conversation.messages.push({
+      id: uid(),
+      authorId: currentAccountId(),
+      content,
+      createdAt: Date.now(),
+    });
+    save();
+    renderConversationList();
+    renderConversationFeed();
+    return;
+  }
+  appendConversationMessage({
+    conversationId: conversation.id,
+    authorId: runtimeUser.id,
+    content,
+  })
+    .then(() => refreshConversationsFromCloud({ rerender: true }))
+    .catch((error) => {
+      console.error("Failed to share file in conversation", error);
+      showToast("Could not share file", "warning");
+    });
 }
 
 function openModal(config) {
@@ -5838,10 +5939,12 @@ function normalize() {
     state.social = {
       conversations: [],
       activeConversationId: null,
+      directory: [],
       categories: [{ id: "general", name: "General" }, { id: "team", name: "Team" }],
     };
   }
   if (!Array.isArray(state.social.conversations)) state.social.conversations = [];
+  if (!Array.isArray(state.social.directory)) state.social.directory = [];
   if (!Array.isArray(state.social.categories) || !state.social.categories.length) {
     state.social.categories = [{ id: "general", name: "General" }, { id: "team", name: "Team" }];
   }
@@ -5859,6 +5962,10 @@ function normalize() {
   if (!Array.isArray(state.profile.blocks)) state.profile.blocks = ["About", "Skills", "Projects", "Achievements"];
   if (!state.profile.themeVariant) state.profile.themeVariant = "dark-glass";
   if (!state.profile.layoutStyle) state.profile.layoutStyle = "studio";
+  if (!state.profile.accountId) state.profile.accountId = activeRuntimeUser()?.id || "";
+  if (!state.profile.publicId) state.profile.publicId = state.profile.userId && String(state.profile.userId).startsWith("FG-")
+    ? state.profile.userId
+    : "";
   if (!Array.isArray(state.profile.friendRequests)) state.profile.friendRequests = [];
   if (!Array.isArray(state.profile.sentRequests)) state.profile.sentRequests = [];
   if (!Array.isArray(state.profile.blockedUsers)) state.profile.blockedUsers = [];
@@ -5881,7 +5988,7 @@ function normalize() {
     type: conversation.type || "direct",
     name: conversation.name || "Conversation",
     categoryId: conversation.categoryId || (conversation.type === "group" ? "team" : "general"),
-    memberIds: Array.isArray(conversation.memberIds) ? conversation.memberIds : [state.profile.userId],
+    memberIds: Array.isArray(conversation.memberIds) ? conversation.memberIds : [currentAccountId()],
     messages: Array.isArray(conversation.messages) ? conversation.messages : [],
   }));
   if (state.social.activeConversationId && !state.social.conversations.some((conversation) => conversation.id === state.social.activeConversationId)) {
@@ -7112,6 +7219,14 @@ function activeRuntimeUser() {
   return window.ForgeBookRuntime?.auth?.user || null;
 }
 
+function currentAccountId() {
+  return activeRuntimeUser()?.id || state.profile.accountId || state.profile.userId || "";
+}
+
+function currentPublicProfileId() {
+  return state.profile.publicId || "";
+}
+
 function mapMarketProfileRecord(profile) {
   return {
     id: profile.id,
@@ -7142,7 +7257,7 @@ function mapFriendRecord(record, fallback = {}) {
     id: record.id || fallback.id,
     userId: profile.id || fallback.userId || record.sender_id || record.receiver_id,
     publicId: profile.profile_url || fallback.publicId || "",
-    accountId: profile.id || record.sender_id || record.receiver_id,
+    accountId: profile.id || fallback.accountId || record.sender_id || record.receiver_id,
     name: profile.nickname || fallback.name || "Collaborator",
     displayName: profile.nickname || fallback.displayName || "Collaborator",
     nickname: profile.nickname || fallback.nickname || "Collaborator",
@@ -7155,6 +7270,24 @@ function mapFriendRecord(record, fallback = {}) {
     tagline: profile.headline || fallback.tagline || "",
     note: fallback.note || "",
     createdAt: record.created_at || fallback.createdAt || Date.now(),
+  });
+}
+
+function mapSocialDirectoryProfile(profile, fallback = {}) {
+  return createFriendProfile({
+    id: profile?.id || fallback.id,
+    userId: profile?.id || fallback.userId || "",
+    accountId: profile?.id || fallback.accountId || "",
+    publicId: profile?.profile_url || fallback.publicId || "",
+    name: profile?.nickname || fallback.name || "Collaborator",
+    displayName: profile?.nickname || fallback.displayName || profile?.nickname || "Collaborator",
+    nickname: profile?.nickname || fallback.nickname || "Collaborator",
+    role: profile?.role || fallback.role || "Collaborator",
+    status: profile?.availability_status || fallback.status || "Available for collaboration",
+    availability: profile?.availability_status || fallback.availability || "Available for collaboration",
+    avatar: profile?.avatar_url || fallback.avatar || "",
+    banner: profile?.banner_url || fallback.banner || "",
+    tagline: profile?.headline || fallback.tagline || "",
   });
 }
 
@@ -7180,12 +7313,63 @@ async function refreshFriendStateFromCloud({ rerender = false } = {}) {
     state.profile.friends = (network.friends || []).map((entry) => mapFriendRecord(entry, { id: entry.friend_id }));
     state.profile.friendRequests = (network.incoming || []).map((entry) => mapFriendRecord(entry, { id: entry.id }));
     state.profile.sentRequests = (network.outgoing || []).map((entry) => mapFriendRecord(entry, { id: entry.id }));
-    if (rerender && !els.overlayPanel?.classList.contains("hidden")) renderFriendsOverlay();
+    const showingFriends =
+      rerender
+      && !els.overlayPanel?.classList.contains("hidden")
+      && els.overlayTitle?.textContent === "Team Network";
+    if (showingFriends) renderFriendsOverlay();
     return network;
   })().finally(() => {
     friendRefreshPromise = null;
   });
   return friendRefreshPromise;
+}
+
+async function refreshConversationsFromCloud({ rerender = false } = {}) {
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) return null;
+  if (conversationRefreshPromise) return conversationRefreshPromise;
+  conversationRefreshPromise = (async () => {
+    const existingCategoryIds = new Map(
+      (state.social.conversations || []).map((conversation) => [conversation.id, conversation.categoryId]),
+    );
+    const network = await fetchConversationNetwork(runtimeUser.id);
+    state.social.directory = (network.profiles || []).map((profile) => mapSocialDirectoryProfile(profile));
+    state.social.conversations = (network.conversations || []).map((conversation) => ({
+      id: conversation.id,
+      type: conversation.type || "direct",
+      name: conversation.name || "Conversation",
+      categoryId:
+        existingCategoryIds.get(conversation.id)
+        || conversation.categoryId
+        || (conversation.type === "group" ? "team" : "general"),
+      memberIds: Array.isArray(conversation.memberIds) ? conversation.memberIds : [runtimeUser.id],
+      messages: (conversation.messages || []).map((message) => ({
+        id: message.id,
+        authorId: message.author_id || message.authorId,
+        content: message.content || "",
+        createdAt: message.created_at ? new Date(message.created_at).getTime() : Date.now(),
+      })),
+    }));
+    if (
+      state.social.activeConversationId
+      && !state.social.conversations.some((conversation) => conversation.id === state.social.activeConversationId)
+    ) {
+      state.social.activeConversationId = state.social.conversations[0]?.id || null;
+    }
+    if (!state.social.activeConversationId && state.social.conversations[0]?.id) {
+      state.social.activeConversationId = state.social.conversations[0].id;
+    }
+    const showingMessages =
+      rerender
+      && !els.overlayPanel?.classList.contains("hidden")
+      && els.overlayTitle?.textContent === "Direct Messages";
+    if (showingMessages) renderMessagesOverlay();
+    return state.social.conversations;
+  })().finally(() => {
+    conversationRefreshPromise = null;
+  });
+  return conversationRefreshPromise;
 }
 
 function sheetColumnLabel(index) {

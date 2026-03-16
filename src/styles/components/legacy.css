@@ -6876,3 +6876,166 @@ select.modal-input optgroup {
   line-height: 1.45;
   white-space: normal;
 }
+
+.overlay-card.overlay-card-chat {
+  width: min(1480px, calc(100vw - 20px));
+  max-height: min(860px, calc(100vh - 20px));
+  overflow: hidden;
+}
+
+.overlay-card.overlay-card-chat .overlay-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.friends-shell,
+.chat-shell {
+  min-height: min(74vh, 760px);
+  height: min(74vh, 760px);
+  align-items: stretch;
+}
+
+.friends-shell {
+  grid-template-columns: minmax(250px, 280px) minmax(0, 1fr) minmax(250px, 300px);
+}
+
+.friends-sidebar,
+.friends-main,
+.friends-requests,
+.chat-sidebar,
+.chat-main,
+.chat-members-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.friends-sidebar,
+.friends-main,
+.friends-requests {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.friends-list-grid,
+.friends-request-list,
+.chat-conversation-list,
+.chat-feed,
+.chat-member-list {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.friends-list-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.friend-card,
+.chat-conversation-item,
+.market-card,
+.market-profile-shell,
+.market-profile-grid,
+.market-main,
+.market-cards {
+  min-width: 0;
+}
+
+.chat-sidebar {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chat-main {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.chat-members-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chat-conversation-item {
+  width: 100%;
+}
+
+.chat-conversation-category-select {
+  width: 100%;
+  min-width: 92px;
+}
+
+.market-grid {
+  align-items: start;
+  min-width: 0;
+}
+
+.market-sidebar {
+  min-width: 0;
+  max-height: calc(100vh - 130px);
+  overflow: auto;
+}
+
+.market-cards {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+}
+
+.market-card-copy strong,
+.market-card-copy span,
+.market-card-bio,
+.market-card-meta,
+.market-tag {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .friends-shell {
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  }
+
+  .friends-requests {
+    display: none;
+  }
+
+  .market-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .market-sidebar {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .overlay-card.overlay-card-chat {
+    width: min(100vw - 12px, 100%);
+    max-height: calc(100vh - 12px);
+    padding: 14px;
+  }
+
+  .friends-shell,
+  .chat-shell {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    min-height: 0;
+  }
+
+  .friends-sidebar,
+  .friends-main,
+  .friends-requests,
+  .chat-sidebar,
+  .chat-main,
+  .chat-members-panel {
+    overflow: visible;
+  }
+
+  .friends-list-grid,
+  .friends-request-list,
+  .chat-conversation-list,
+  .chat-feed,
+  .chat-member-list {
+    max-height: 34vh;
+  }
+
+  .chat-members-panel {
+    display: grid;
+  }
+}

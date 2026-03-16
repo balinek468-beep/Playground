@@ -2,6 +2,24 @@ import { ENV } from "../../constants/env.js";
 import { randomUserId } from "../../utils/helpers.js";
 import { getSupabaseClient } from "../auth/supabaseClient.js";
 
+async function resolveStablePublicId(client, preferredId, userId) {
+  const candidates = [];
+  if (preferredId) candidates.push(String(preferredId).trim().toUpperCase());
+  while (candidates.length < 6) candidates.push(randomUserId());
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const { data, error } = await client
+      .from(ENV.profileTable)
+      .select("id, profile_url")
+      .eq("profile_url", candidate)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data || data.id === userId) return candidate;
+  }
+  return randomUserId();
+}
+
 export async function ensureProfile(user, fallbackProfile = {}) {
   const client = getSupabaseClient();
   if (!client || !user) return null;
@@ -10,11 +28,11 @@ export async function ensureProfile(user, fallbackProfile = {}) {
     .select("*")
     .eq("id", user.id)
     .maybeSingle();
-  const publicProfileId =
-    existing?.profile_url ||
-    fallbackProfile.publicId ||
-    fallbackProfile.profileUrl ||
-    randomUserId();
+  const publicProfileId = await resolveStablePublicId(
+    client,
+    existing?.profile_url || fallbackProfile.publicId || fallbackProfile.profileUrl,
+    user.id,
+  );
   const payload = {
     id: user.id,
     email: user.email || null,
@@ -40,10 +58,11 @@ export async function ensureProfile(user, fallbackProfile = {}) {
 export async function fetchProfileByPublicId(publicId) {
   const client = getSupabaseClient();
   if (!client || !publicId) return null;
+  const normalizedId = String(publicId).trim();
   const { data, error } = await client
     .from(ENV.profileTable)
     .select("*")
-    .eq("profile_url", publicId)
+    .ilike("profile_url", normalizedId)
     .maybeSingle();
   if (error) throw error;
   return data || null;
