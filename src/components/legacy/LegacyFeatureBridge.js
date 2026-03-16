@@ -695,6 +695,14 @@ function bindEvents() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") handleGlobalSheetDragStop();
   });
+  document.addEventListener("dragover", handleGlobalLibraryVaultDragOver);
+  document.addEventListener("drop", handleGlobalLibraryVaultDragStop);
+  document.addEventListener("dragend", handleGlobalLibraryVaultDragStop);
+  document.addEventListener("pointerup", handleGlobalLibraryVaultDragStop);
+  window.addEventListener("blur", handleGlobalLibraryVaultDragStop);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) handleGlobalLibraryVaultDragStop();
+  });
 }
 
 function openCreditsModal() {
@@ -1638,22 +1646,26 @@ function clearLibraryCategoryDropTargets() {
 }
 
 function updateLibraryAutoScroll(clientY) {
+  const scroller = document.querySelector(".library-grid");
+  if (!scroller) return;
+  const rect = scroller.getBoundingClientRect();
   const edge = 96;
   const maxSpeed = 18;
   let delta = 0;
-  if (clientY < edge) {
-    delta = -Math.ceil(((edge - clientY) / edge) * maxSpeed);
-  } else if (clientY > window.innerHeight - edge) {
-    delta = Math.ceil(((clientY - (window.innerHeight - edge)) / edge) * maxSpeed);
+  if (clientY < rect.top + edge) {
+    delta = -Math.ceil((((rect.top + edge) - clientY) / edge) * maxSpeed);
+  } else if (clientY > rect.bottom - edge) {
+    delta = Math.ceil(((clientY - (rect.bottom - edge)) / edge) * maxSpeed);
   }
   if (!delta) {
     stopLibraryAutoScroll();
     return;
   }
   if (!libraryAutoScrollState) {
-    libraryAutoScrollState = { delta, raf: 0 };
+    libraryAutoScrollState = { delta, raf: 0, scroller };
   } else {
     libraryAutoScrollState.delta = delta;
+    libraryAutoScrollState.scroller = scroller;
   }
   if (libraryAutoScrollState.raf) return;
   const tick = () => {
@@ -1661,7 +1673,7 @@ function updateLibraryAutoScroll(clientY) {
       stopLibraryAutoScroll();
       return;
     }
-    window.scrollBy({ top: libraryAutoScrollState.delta, behavior: "auto" });
+    libraryAutoScrollState.scroller.scrollBy({ top: libraryAutoScrollState.delta, behavior: "auto" });
     libraryAutoScrollState.raf = window.requestAnimationFrame(tick);
   };
   libraryAutoScrollState.raf = window.requestAnimationFrame(tick);
@@ -1671,6 +1683,16 @@ function stopLibraryAutoScroll() {
   if (!libraryAutoScrollState) return;
   if (libraryAutoScrollState.raf) window.cancelAnimationFrame(libraryAutoScrollState.raf);
   libraryAutoScrollState = null;
+}
+
+function handleGlobalLibraryVaultDragOver(event) {
+  if (!draggedVaultId) return;
+  updateLibraryAutoScroll(event.clientY);
+}
+
+function handleGlobalLibraryVaultDragStop() {
+  if (!draggedVaultId && !libraryAutoScrollState) return;
+  stopLibraryAutoScroll();
 }
 
 function assignVaultCategory(vaultId, categoryId) {
