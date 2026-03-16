@@ -237,6 +237,8 @@ let lastSavedAt = null;
 let toastTimerSeed = 0;
 let saveTimer = null;
 let pendingSaveSnapshot = "";
+let lastWrittenSnapshot = "";
+const SAVE_DEBOUNCE_MS = 1200;
 let libraryRenderRaf = 0;
 let workspaceRenderRaf = 0;
 let profileMediaTarget = null;
@@ -6145,12 +6147,17 @@ function stopFloatingImageInteraction() {
 }
 
 function save() {
-  pendingSaveSnapshot = JSON.stringify(state);
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
+    pendingSaveSnapshot = JSON.stringify(state);
+    if (pendingSaveSnapshot === lastWrittenSnapshot) {
+      saveTimer = null;
+      return;
+    }
     writeWorkspaceSnapshot(pendingSaveSnapshot);
+    lastWrittenSnapshot = pendingSaveSnapshot;
     saveTimer = null;
-  }, 180);
+  }, SAVE_DEBOUNCE_MS);
   lastSavedAt = new Date();
   if (state.activeView === "workspace") updateDocumentState(savedStateLabel());
 }
@@ -6161,7 +6168,9 @@ function flushSave() {
     window.clearTimeout(saveTimer);
     saveTimer = null;
   }
+  if (pendingSaveSnapshot === lastWrittenSnapshot) return;
   writeWorkspaceSnapshot(pendingSaveSnapshot);
+  lastWrittenSnapshot = pendingSaveSnapshot;
 }
 
 function scheduleLibraryRender() {
