@@ -25,6 +25,14 @@ import {
 import { ensureMarketPage } from "../market/MarketPage.js";
 import { renderSettingsPage } from "../settings/SettingsPage.js";
 import { filterLegacyMockMarketProfiles } from "../../utils/marketProfiles.js";
+import { fetchMarketplaceProfiles, upsertMarketplaceProfile } from "../../services/database/MarketplaceRepository.js";
+import {
+  acceptFriendRequest,
+  cancelFriendRequest,
+  declineFriendRequest,
+  fetchFriendNetwork,
+  sendFriendRequest,
+} from "../../services/database/FriendRepository.js";
 import { collectLegacyElements } from "./LegacyViewMount.js";
 import { createCanvasRuntime } from "../../features/canvas/canvasRuntime.js";
 
@@ -202,20 +210,7 @@ if (runtimeUser) {
   }
 }
 if (Array.isArray(window.ForgeBookRuntime?.data?.marketProfiles) && window.ForgeBookRuntime.data.marketProfiles.length) {
-  state.marketProfiles = filterLegacyMockMarketProfiles(window.ForgeBookRuntime.data.marketProfiles).map((profile) => ({
-    id: profile.id,
-    userId: profile.user_id || profile.userId || profile.id,
-    nickname: profile.nickname || profile.display_name || "Developer",
-    displayName: profile.display_name || profile.nickname || "Developer",
-    role: profile.role || "Game Designer",
-    bio: profile.bio || "",
-    tags: Array.isArray(profile.tags) ? profile.tags : [],
-    tools: Array.isArray(profile.tools) ? profile.tools : [],
-    experience: profile.experience_level || profile.experience || "Mid",
-    availability: profile.availability_status || profile.availability || "Open to offers",
-    rate: profile.hourly_rate ? `$${profile.hourly_rate}/hr` : profile.rate || "Contact for rate",
-    portfolio: Array.isArray(profile.portfolio) ? profile.portfolio : [],
-  }));
+  state.marketProfiles = filterLegacyMockMarketProfiles(window.ForgeBookRuntime.data.marketProfiles).map(mapMarketProfileRecord);
 }
 let vaultSearch = "";
 let contextVaultId = null;
@@ -251,6 +246,8 @@ let canvasNodeDrag = null;
 let canvasPanState = null;
 let friendsSearch = "";
 let marketReturnView = "library";
+let marketRefreshPromise = null;
+let friendRefreshPromise = null;
 
 const on = (selector, event, handler) => {
   const node = $(selector);
@@ -278,6 +275,14 @@ bindEvents();
 normalize();
 applyLocationState();
 render();
+if (activeRuntimeUser()?.id) {
+  Promise.resolve()
+    .then(() => refreshMarketProfilesFromCloud({ rerender: state.activeView === "market" }))
+    .catch(() => null);
+  Promise.resolve()
+    .then(() => refreshFriendStateFromCloud())
+    .catch(() => null);
+}
 
 function bindEvents() {
   window.addEventListener("beforeunload", flushSave);
@@ -443,27 +448,35 @@ function bindEvents() {
   });
   on("#libraryProfileButton", "click", () => openOverlay("profile"));
   on("#librarySettingsButton", "click", () => openOverlay("settings"));
-  on("#libraryFriendsButton", "click", () => openOverlay("friends"));
+  on("#libraryFriendsButton", "click", async () => {
+    await refreshFriendStateFromCloud();
+    openOverlay("friends");
+  });
   on("#libraryMessagesButton", "click", () => openOverlay("messages"));
   on("#libraryFilesButton", "click", () => openOverlay("file-vault"));
-  on("#libraryMarketButton", "click", () => {
+  on("#libraryMarketButton", "click", async () => {
     marketReturnView = state.activeView;
     state.activeView = "market";
     save();
     render();
+    await refreshMarketProfilesFromCloud({ rerender: true });
   });
   on("#libraryNotificationsButton", "click", () => openOverlay("notifications"));
   on("#profileButton", "click", () => openOverlay("profile"));
   on("#softwareSettingsButton", "click", () => openOverlay("settings"));
   on("#quickSwitchButton", "click", () => openOverlay("switcher"));
-  on("#friendsButton", "click", () => openOverlay("friends"));
+  on("#friendsButton", "click", async () => {
+    await refreshFriendStateFromCloud();
+    openOverlay("friends");
+  });
   on("#messagesButton", "click", () => openOverlay("messages"));
   on("#filesButton", "click", () => openOverlay("file-vault"));
-  on("#marketButton", "click", () => {
+  on("#marketButton", "click", async () => {
     marketReturnView = state.activeView;
     state.activeView = "market";
     save();
     render();
+    await refreshMarketProfilesFromCloud({ rerender: true });
   });
   on("#notificationsButton", "click", () => openOverlay("notifications"));
   on("#shareVaultButton", "click", () => openOverlay("share"));
@@ -4007,10 +4020,15 @@ function openMarketComposer() {
       </div>
     </section>
   `;
-  on("#saveMarketPostButton", "click", () => {
+  on("#saveMarketPostButton", "click", async () => {
+    const runtimeUser = activeRuntimeUser();
+    if (!runtimeUser?.id) {
+      showToast("Sign in required to publish a market post", "warning");
+      return;
+    }
     const payload = {
-      id: existing?.id || uid(),
-      userId: state.profile.userId,
+      id: runtimeUser.id,
+      userId: runtimeUser.id,
       nickname: $("#marketPostNicknameInput")?.value.trim() || state.profile.name,
       displayName: $("#marketPostDisplayInput")?.value.trim() || state.profile.name,
       role: $("#marketPostRoleInput")?.value.trim() || state.profile.role || "Designer",
@@ -4023,19 +4041,43 @@ function openMarketComposer() {
       portfolio: existing?.portfolio || [{ title: "Featured Work", description: "Portfolio entry" }],
       avatar: state.profile.avatar || "",
     };
-    state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.userId !== state.profile.userId);
-    state.marketProfiles.unshift(payload);
-    save();
-    pushNotification("market", "Market profile published", `${payload.nickname} is now visible in the market.`, {
-      scopeType: "market",
-      scopeId: payload.userId,
-      groupLabel: "Your marketplace profile",
-      actionLabel: "Open market",
-      destination: { view: "market" },
-    });
-    closeOverlay();
-    renderMarket();
-    showToast(existing ? "Market post updated" : "Market post created");
+    const dbPayload = {
+      id: runtimeUser.id,
+      user_id: runtimeUser.id,
+      nickname: payload.nickname,
+      display_name: payload.displayName,
+      role: payload.role,
+      bio: payload.bio,
+      availability_status: payload.availability,
+      experience_level: payload.experience,
+      hourly_rate: Number.parseFloat(String(payload.rate).replace(/[^0-9.]+/g, "")) || null,
+      tags: payload.tags,
+      tools: payload.tools,
+      portfolio: payload.portfolio,
+      featured_skills: payload.tags,
+      collaboration_preferences: "",
+      compensation_preference: payload.rate || "Negotiable",
+    };
+    try {
+      const savedProfile = await upsertMarketplaceProfile(dbPayload);
+      state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.userId !== runtimeUser.id);
+      state.marketProfiles.unshift(mapMarketProfileRecord(savedProfile || dbPayload));
+      save();
+      pushNotification("market", "Market profile published", `${payload.nickname} is now visible in the market.`, {
+        scopeType: "market",
+        scopeId: payload.userId,
+        groupLabel: "Your marketplace profile",
+        actionLabel: "Open market",
+        destination: { view: "market" },
+      });
+      await refreshMarketProfilesFromCloud({ rerender: true });
+      closeOverlay();
+      renderMarket();
+      showToast(existing ? "Market post updated" : "Market post created");
+    } catch (error) {
+      console.error("Failed to publish market post", error);
+      showToast("Could not publish market post", "warning");
+    }
   });
 }
 
@@ -4373,36 +4415,58 @@ function openFriendProfileOverlay(profileId, source = "friends") {
     </section>
   `;
   document.querySelectorAll("[data-friend-profile-message]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const pending = (state.profile.friendRequests || []).find((entry) => entry.id === button.dataset.friendProfileMessage || entry.userId === button.dataset.friendProfileMessage);
-      if (pending && !(state.profile.friends || []).some((friend) => friend.userId === pending.userId)) {
-        state.profile.friends = [...(state.profile.friends || []), { ...pending, status: "Online" }];
-        state.profile.friendRequests = (state.profile.friendRequests || []).filter((entry) => entry.id !== pending.id);
-        save();
+      const runtimeUser = activeRuntimeUser();
+      if (pending && runtimeUser?.id && !(state.profile.friends || []).some((friend) => friend.userId === pending.userId)) {
+        try {
+          await acceptFriendRequest(pending.id, runtimeUser.id);
+          await refreshFriendStateFromCloud();
+          save();
+        } catch (error) {
+          console.error("Failed to accept pending request before opening DM", error);
+        }
       }
       openDirectMessage(button.dataset.friendProfileMessage);
       openOverlay("messages");
     });
   });
   document.querySelectorAll("[data-friend-profile-accept]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const request = (state.profile.friendRequests || []).find((entry) => entry.id === button.dataset.friendProfileAccept || entry.userId === button.dataset.friendProfileAccept);
       if (!request) return;
-      state.profile.friends = [...(state.profile.friends || []), { ...request, status: "Online" }];
-      state.profile.friendRequests = (state.profile.friendRequests || []).filter((entry) => entry.id !== request.id);
-      state.profile.sentRequests = (state.profile.sentRequests || []).filter((entry) => entry.userId !== request.userId);
-      save();
-      pushNotification("friend", "Friend request accepted", `${request.name} is now in your network.`);
-      openFriendProfileOverlay(request.id, "friends");
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id) return;
+      try {
+        await acceptFriendRequest(request.id, runtimeUser.id);
+        await refreshFriendStateFromCloud();
+        save();
+        pushNotification("friend", "Friend request accepted", `${request.name} is now in your network.`);
+        openFriendProfileOverlay(request.userId || request.id, "friends");
+      } catch (error) {
+        console.error("Failed to accept friend profile request", error);
+        showToast("Could not accept request", "warning");
+      }
     });
   });
   document.querySelectorAll("[data-friend-profile-request]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.profile.sentRequests = [profile, ...(state.profile.sentRequests || []).filter((entry) => entry.userId !== profile.userId)];
-      save();
-      pushNotification("friend", "Friend request sent", `Invite sent to ${profile.name}.`);
-      showToast("Request sent");
-      openFriendProfileOverlay(profile.id, "friends");
+    button.addEventListener("click", async () => {
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id || !profile.userId) {
+        showToast("Sign in required to send requests", "warning");
+        return;
+      }
+      try {
+        await sendFriendRequest(runtimeUser.id, profile.userId);
+        await refreshFriendStateFromCloud();
+        save();
+        pushNotification("friend", "Friend request sent", `Invite sent to ${profile.name}.`);
+        showToast("Request sent");
+        openFriendProfileOverlay(profile.userId, "friends");
+      } catch (error) {
+        console.error("Failed to send friend profile request", error);
+        showToast("Could not send request", "warning");
+      }
     });
   });
 }
@@ -4464,22 +4528,33 @@ function findProfileFriendById() {
     showToast(`Found ${existing.name}`);
     return;
   }
-  const created = createFriendProfile({
-    userId: query,
-    name: `Contact ${query.slice(-4)}`,
-    role: "Collaborator",
-    status: "Pending request",
-  });
-  state.profile.sentRequests = [created, ...(state.profile.sentRequests || []).filter((entry) => entry.userId !== query)];
-  save();
-  renderProfileFriendList();
-  pushNotification("friend", "Friend request sent", `Invite sent to ${query}.`);
-  showToast("Request sent by ID");
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) {
+    showToast("Sign in required to send requests", "warning");
+    return;
+  }
+  sendFriendRequest(runtimeUser.id, query)
+    .then(() => refreshFriendStateFromCloud())
+    .then(() => {
+      save();
+      renderProfileFriendList();
+      pushNotification("friend", "Friend request sent", `Invite sent to ${query}.`);
+      showToast("Request sent by ID");
+    })
+    .catch((error) => {
+      console.error("Failed to send friend request by ID", error);
+      showToast("Could not send request", "warning");
+    });
 }
 
 function addMarketProfileAsFriend(profileId, openMessage = false) {
   const profile = (state.marketProfiles || []).find((entry) => entry.id === profileId);
   if (!profile) return;
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) {
+    showToast("Sign in required to add contacts", "warning");
+    return;
+  }
   let friend = (state.profile.friends || []).find((entry) => entry.userId === profile.userId);
   if (!friend) {
     friend = createFriendProfile({
@@ -4497,10 +4572,17 @@ function addMarketProfileAsFriend(profileId, openMessage = false) {
       skills: profile.tools || [],
     });
     if (!openMessage) {
-      state.profile.sentRequests = [friend, ...(state.profile.sentRequests || []).filter((entry) => entry.userId !== friend.userId)];
-      save();
-      pushNotification("friend", "Friend request sent", `Invite sent to ${profile.nickname}.`);
-      showToast("Request sent");
+      sendFriendRequest(runtimeUser.id, profile.userId)
+        .then(() => refreshFriendStateFromCloud())
+        .then(() => {
+          save();
+          pushNotification("friend", "Friend request sent", `Invite sent to ${profile.nickname}.`);
+          showToast("Request sent");
+        })
+        .catch((error) => {
+          console.error("Failed to send market friend request", error);
+          showToast("Could not send request", "warning");
+        });
       return;
     }
     state.profile.friends = [...(state.profile.friends || []), friend];
@@ -4604,17 +4686,23 @@ function renderFriendsOverlay() {
     if (!input) return;
     const query = input.value.trim().toUpperCase();
     if (!query) return;
-    const request = createFriendProfile({
-      userId: query,
-      name: `Contact ${query.slice(-4)}`,
-      role: "Collaborator",
-      status: "Pending request",
-    });
-    state.profile.sentRequests = [request, ...(state.profile.sentRequests || []).filter((entry) => entry.userId !== query)];
-    save();
-    pushNotification("friend", "Friend request sent", `Invite sent to ${query}.`);
-    friendsTab = "sent";
-    renderFriendsOverlay();
+    const runtimeUser = activeRuntimeUser();
+    if (!runtimeUser?.id) {
+      showToast("Sign in required to send requests", "warning");
+      return;
+    }
+    sendFriendRequest(runtimeUser.id, query)
+      .then(() => refreshFriendStateFromCloud({ rerender: false }))
+      .then(() => {
+        save();
+        pushNotification("friend", "Friend request sent", `Invite sent to ${query}.`);
+        friendsTab = "sent";
+        renderFriendsOverlay();
+      })
+      .catch((error) => {
+        console.error("Failed to send friend request", error);
+        showToast("Could not send request", "warning");
+      });
   });
   renderFriendRows();
 }
@@ -4753,30 +4841,52 @@ function renderFriendRows() {
     });
   });
   document.querySelectorAll("[data-request-accept]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const request = (state.profile.friendRequests || []).find((entry) => entry.id === button.dataset.requestAccept);
       if (!request) return;
-      state.profile.friends = [...(state.profile.friends || []), { ...request, status: "Online" }];
-      state.profile.friendRequests = (state.profile.friendRequests || []).filter((entry) => entry.id !== request.id);
-      state.profile.sentRequests = (state.profile.sentRequests || []).filter((entry) => entry.userId !== request.userId);
-      save();
-      pushNotification("friend", "Friend request accepted", `${request.name} is now in your network.`);
-      renderFriendsOverlay();
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id) return;
+      try {
+        await acceptFriendRequest(request.id, runtimeUser.id);
+        await refreshFriendStateFromCloud({ rerender: false });
+        save();
+        pushNotification("friend", "Friend request accepted", `${request.name} is now in your network.`);
+        renderFriendsOverlay();
+      } catch (error) {
+        console.error("Failed to accept friend request", error);
+        showToast("Could not accept request", "warning");
+      }
     });
   });
   document.querySelectorAll("[data-request-decline]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.profile.friendRequests = (state.profile.friendRequests || []).filter((entry) => entry.id !== button.dataset.requestDecline);
-      save();
-      renderFriendsOverlay();
+    button.addEventListener("click", async () => {
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id) return;
+      try {
+        await declineFriendRequest(button.dataset.requestDecline, runtimeUser.id);
+        await refreshFriendStateFromCloud({ rerender: false });
+        save();
+        renderFriendsOverlay();
+      } catch (error) {
+        console.error("Failed to decline friend request", error);
+        showToast("Could not decline request", "warning");
+      }
     });
   });
   document.querySelectorAll("[data-sent-cancel]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.profile.sentRequests = (state.profile.sentRequests || []).filter((entry) => entry.id !== button.dataset.sentCancel);
-      save();
-      showToast("Request cancelled");
-      renderFriendsOverlay();
+    button.addEventListener("click", async () => {
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id) return;
+      try {
+        await cancelFriendRequest(button.dataset.sentCancel, runtimeUser.id);
+        await refreshFriendStateFromCloud({ rerender: false });
+        save();
+        showToast("Request cancelled");
+        renderFriendsOverlay();
+      } catch (error) {
+        console.error("Failed to cancel friend request", error);
+        showToast("Could not cancel request", "warning");
+      }
     });
   });
 }
@@ -6880,6 +6990,83 @@ function rgbaString(hex, alpha) {
   const rgb = hexToRgb(hex);
   if (!rgb) return `rgba(139, 92, 246, ${alpha})`;
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
+function activeRuntimeUser() {
+  return window.ForgeBookRuntime?.auth?.user || null;
+}
+
+function mapMarketProfileRecord(profile) {
+  return {
+    id: profile.id,
+    userId: profile.user_id || profile.userId || profile.id,
+    nickname: profile.nickname || profile.display_name || "Developer",
+    displayName: profile.display_name || profile.displayName || profile.nickname || "Developer",
+    role: profile.role || "Game Designer",
+    bio: profile.bio || "",
+    tags: Array.isArray(profile.tags) ? profile.tags : [],
+    tools: Array.isArray(profile.tools) ? profile.tools : [],
+    experience: profile.experience_level || profile.experience || "Mid",
+    availability: profile.availability_status || profile.availability || "Open to offers",
+    rate: profile.hourly_rate ? `$${profile.hourly_rate}/hr` : (profile.rate || "Negotiable"),
+    avatar: profile.avatar_url || profile.avatar || "",
+    banner: profile.banner_url || profile.banner || "",
+    portfolio: Array.isArray(profile.portfolio) ? profile.portfolio : [],
+    featuredSkills: Array.isArray(profile.featured_skills) ? profile.featured_skills : [],
+    collaborationPreferences: profile.collaboration_preferences || profile.collaborationPreferences || "",
+    compensationPreference: profile.compensation_preference || profile.compensationPreference || "",
+    updatedAt: profile.updated_at || Date.now(),
+  };
+}
+
+function mapFriendRecord(record, fallback = {}) {
+  const profile = record?.profile || {};
+  return createFriendProfile({
+    id: record.id || fallback.id,
+    userId: profile.id || fallback.userId || record.sender_id || record.receiver_id,
+    name: profile.nickname || fallback.name || "Collaborator",
+    displayName: profile.nickname || fallback.displayName || "Collaborator",
+    nickname: profile.nickname || fallback.nickname || "Collaborator",
+    role: profile.role || fallback.role || "Collaborator",
+    status: profile.availability_status || fallback.status || "Available for collaboration",
+    availability: profile.availability_status || fallback.availability || "Available for collaboration",
+    avatar: profile.avatar_url || fallback.avatar || "",
+    banner: profile.banner_url || fallback.banner || "",
+    bio: profile.bio || fallback.bio || "",
+    tagline: profile.headline || fallback.tagline || "",
+    note: fallback.note || "",
+    createdAt: record.created_at || fallback.createdAt || Date.now(),
+  });
+}
+
+async function refreshMarketProfilesFromCloud({ rerender = false } = {}) {
+  if (marketRefreshPromise) return marketRefreshPromise;
+  marketRefreshPromise = (async () => {
+    const profiles = await fetchMarketplaceProfiles();
+    state.marketProfiles = filterLegacyMockMarketProfiles(profiles || []).map(mapMarketProfileRecord);
+    if (rerender && state.activeView === "market") renderMarket();
+    return state.marketProfiles;
+  })().finally(() => {
+    marketRefreshPromise = null;
+  });
+  return marketRefreshPromise;
+}
+
+async function refreshFriendStateFromCloud({ rerender = false } = {}) {
+  const runtimeUser = activeRuntimeUser();
+  if (!runtimeUser?.id) return null;
+  if (friendRefreshPromise) return friendRefreshPromise;
+  friendRefreshPromise = (async () => {
+    const network = await fetchFriendNetwork(runtimeUser.id);
+    state.profile.friends = (network.friends || []).map((entry) => mapFriendRecord(entry, { id: entry.friend_id }));
+    state.profile.friendRequests = (network.incoming || []).map((entry) => mapFriendRecord(entry, { id: entry.id }));
+    state.profile.sentRequests = (network.outgoing || []).map((entry) => mapFriendRecord(entry, { id: entry.id }));
+    if (rerender && !els.overlayPanel?.classList.contains("hidden")) renderFriendsOverlay();
+    return network;
+  })().finally(() => {
+    friendRefreshPromise = null;
+  });
+  return friendRefreshPromise;
 }
 
 function sheetColumnLabel(index) {
