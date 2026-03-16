@@ -27,4 +27,5 @@
 @import "./pages/market.css";
 @import "./pages/notifications.css";
 @import "./pages/settings.css";
+@import "./pages/public.css";
 @import "./components/legacy.css";
