@@ -5977,6 +5977,8 @@ select.modal-input optgroup {
   width: 100%;
   margin-inline: 0;
   padding-inline: 24px;
+  background: #12161f;
+  backdrop-filter: none;
 }
 
 .workspace-view[data-doc-type="text"] .editor-meta-bar,
@@ -6011,6 +6013,9 @@ select.modal-input optgroup {
 .workspace-view[data-doc-type="text"] .text-editor,
 .workspace-view.context-collapsed[data-doc-type="text"] .text-editor {
   max-width: 100%;
+  background: #11151d;
+  border-color: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
 }
 
 .workspace-view[data-doc-type="text"][data-writing-width="1"] .editor-floating-layer,
