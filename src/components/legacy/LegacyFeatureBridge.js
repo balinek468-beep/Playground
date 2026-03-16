@@ -230,6 +230,7 @@ let draggedSheetDropMarker = null;
 let draggedBoardCard = null;
 let sheetAutoScrollState = null;
 let vaultAutoScrollState = null;
+let libraryAutoScrollState = null;
 let isEditingSheetFormula = false;
 let workspaceSearch = "";
 let lastSavedAt = null;
@@ -1599,9 +1600,13 @@ function renderVaultCard(vault, index) {
   });
   card.addEventListener("dragend", () => {
     draggedVaultId = null;
+    stopLibraryAutoScroll();
     clearLibraryCategoryDropTargets();
   });
-  card.addEventListener("dragover", (event) => handleVaultCoverDragOver(event));
+  card.addEventListener("dragover", (event) => {
+    updateLibraryAutoScroll(event.clientY);
+    handleVaultCoverDragOver(event);
+  });
   card.addEventListener("drop", (event) => handleVaultCoverDrop(event, vault.id));
   card.addEventListener("paste", (event) => handleVaultCoverPaste(event, vault.id));
   return card;
@@ -1611,19 +1616,61 @@ function bindLibraryCategoryDropTarget(node, categoryId) {
   node.addEventListener("dragover", (event) => {
     if (!draggedVaultId) return;
     event.preventDefault();
+    updateLibraryAutoScroll(event.clientY);
     node.classList.add("is-drop-target");
   });
-  node.addEventListener("dragleave", () => node.classList.remove("is-drop-target"));
+  node.addEventListener("dragleave", () => {
+    node.classList.remove("is-drop-target");
+    stopLibraryAutoScroll();
+  });
   node.addEventListener("drop", (event) => {
     if (!draggedVaultId) return;
     event.preventDefault();
+    stopLibraryAutoScroll();
     assignVaultCategory(draggedVaultId, categoryId);
     clearLibraryCategoryDropTargets();
   });
 }
 
 function clearLibraryCategoryDropTargets() {
+  stopLibraryAutoScroll();
   document.querySelectorAll(".library-category-section.is-drop-target, .library-tree-heading.is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
+}
+
+function updateLibraryAutoScroll(clientY) {
+  const edge = 96;
+  const maxSpeed = 18;
+  let delta = 0;
+  if (clientY < edge) {
+    delta = -Math.ceil(((edge - clientY) / edge) * maxSpeed);
+  } else if (clientY > window.innerHeight - edge) {
+    delta = Math.ceil(((clientY - (window.innerHeight - edge)) / edge) * maxSpeed);
+  }
+  if (!delta) {
+    stopLibraryAutoScroll();
+    return;
+  }
+  if (!libraryAutoScrollState) {
+    libraryAutoScrollState = { delta, raf: 0 };
+  } else {
+    libraryAutoScrollState.delta = delta;
+  }
+  if (libraryAutoScrollState.raf) return;
+  const tick = () => {
+    if (!libraryAutoScrollState || !draggedVaultId) {
+      stopLibraryAutoScroll();
+      return;
+    }
+    window.scrollBy({ top: libraryAutoScrollState.delta, behavior: "auto" });
+    libraryAutoScrollState.raf = window.requestAnimationFrame(tick);
+  };
+  libraryAutoScrollState.raf = window.requestAnimationFrame(tick);
+}
+
+function stopLibraryAutoScroll() {
+  if (!libraryAutoScrollState) return;
+  if (libraryAutoScrollState.raf) window.cancelAnimationFrame(libraryAutoScrollState.raf);
+  libraryAutoScrollState = null;
 }
 
 function assignVaultCategory(vaultId, categoryId) {
