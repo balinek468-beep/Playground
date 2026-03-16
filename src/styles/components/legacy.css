@@ -6629,6 +6629,113 @@ select.modal-input optgroup {
   gap: 14px;
 }
 
+/* Live settings override layer */
+.library-header,
+.workspace-topbar,
+.toolbar,
+.workspace-sidebar,
+.library-sidebar,
+.library-summary,
+.editor-panel,
+.canvas-panel,
+.sheet-panel,
+.board-panel,
+.graph-panel,
+.vault-contents-bar,
+.vault-tree-panel,
+.context-panel,
+.overlay-card,
+.modal-card,
+.settings-toolbar,
+.settings-sidebar-section,
+.settings-preview-card,
+.settings-help-card,
+.settings-category-panel,
+.settings-group,
+.storage-sidebar-panel,
+.storage-detail-panel,
+.board-sidebar-panel,
+.sheet-sidebar-panel,
+.sheet-table-card,
+.board-column,
+.board-card,
+.document-card,
+.market-card,
+.friend-card,
+.notification-row {
+  border-radius: var(--forge-panel-radius, 18px);
+  backdrop-filter: blur(var(--forge-blur-strength, 18px));
+  box-shadow: var(--shadow);
+}
+
+.library-header,
+.workspace-topbar,
+.toolbar,
+.workspace-sidebar,
+.library-sidebar,
+.library-summary,
+.editor-panel,
+.canvas-panel,
+.sheet-panel,
+.board-panel,
+.graph-panel,
+.vault-contents-bar,
+.vault-tree-panel,
+.context-panel,
+.overlay-card,
+.modal-card,
+.settings-toolbar,
+.settings-sidebar-section,
+.settings-preview-card,
+.settings-help-card,
+.settings-category-panel,
+.settings-group {
+  background: color-mix(in srgb, #10141d calc(var(--forge-panel-opacity, 0.84) * 100%), transparent);
+}
+
+.document-card,
+.market-card,
+.friend-card,
+.notification-row,
+.sheet-table-card,
+.board-column,
+.board-card,
+.storage-file-card {
+  background: color-mix(in srgb, #121722 calc((var(--forge-panel-opacity, 0.84) - 0.04) * 100%), transparent);
+}
+
+.primary-button {
+  background: linear-gradient(135deg, var(--forge-accent-from, #8b5cf6), var(--forge-accent, #8b5cf6) 58%, var(--forge-accent-to, #38bdf8));
+}
+
+.secondary-button.active,
+.mode-button.active,
+.tab-button.active,
+.toolbar-width-group .writing-width-button.active,
+.canvas-rail-button.active,
+.canvas-tab-button.active {
+  border-color: color-mix(in srgb, var(--forge-accent, #8b5cf6) 65%, white);
+  background: color-mix(in srgb, var(--forge-accent, #8b5cf6) 22%, rgba(18, 22, 32, 0.92));
+}
+
+.text-editor blockquote,
+.graph-node.active,
+.text-editor mark,
+.sheet-selection-chip,
+.friends-pill,
+.profile-badge-chip.active {
+  border-color: color-mix(in srgb, var(--forge-accent, #8b5cf6) 55%, transparent);
+}
+
+.text-editor blockquote,
+.graph-node.active {
+  color: var(--text);
+}
+
+.text-editor blockquote {
+  border-left-color: var(--forge-accent, #8b5cf6);
+}
+
 .canvas-color-chip {
   width: 28px;
   height: 28px;
