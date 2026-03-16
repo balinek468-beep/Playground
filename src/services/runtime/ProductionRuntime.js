@@ -1,7 +1,7 @@
 import { ENV, isSupabaseConfigured } from "../../constants/env.js";
 import { WORKSPACE_STORAGE_KEYS } from "../../utils/constants.js";
 import { debounce } from "../../utils/performance.js";
-import { getSession, onAuthStateChange, signInWithPassword, signOut, signUpWithPassword } from "../auth/AuthService.js";
+import { getAuthenticatedUser, getSession, onAuthStateChange, signInWithPassword, signOut, signUpWithPassword } from "../auth/AuthService.js";
 import { fetchMarketplaceProfiles } from "../database/MarketplaceRepository.js";
 import { ensureProfile } from "../database/ProfileRepository.js";
 import { fetchWorkspaceSnapshot, persistWorkspaceSnapshot } from "../database/WorkspaceRepository.js";
@@ -70,6 +70,20 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
         }
         await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
+      if (hasRecentRememberedAuthUser()) {
+        try {
+          const recoveredUser = await getAuthenticatedUser();
+          if (recoveredUser) {
+            runtime.auth.user = recoveredUser;
+            activeAuthUserId = recoveredUser.id;
+            rememberAuthUser(recoveredUser.id);
+            unmountAuthGate();
+            return;
+          }
+        } catch (error) {
+          console.error("ForgeBook auth restore fallback failed", error);
+        }
+      }
       mountAuthGate(runtime);
     }, 900);
   };
@@ -126,7 +140,14 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
 
   if (!isSupabaseConfigured()) return runtime;
 
-  const { session, user } = await getSession();
+  let { session, user } = await getSession();
+  if (!user && hasRecentRememberedAuthUser()) {
+    try {
+      user = await getAuthenticatedUser();
+    } catch (error) {
+      console.error("ForgeBook auth bootstrap fallback failed", error);
+    }
+  }
   runtime.auth.session = session;
   runtime.auth.user = user;
   activeAuthUserId = user?.id || null;

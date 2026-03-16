@@ -8,6 +8,14 @@ export async function getSession() {
   return { session: data.session, user: data.session?.user || null };
 }
 
+export async function getAuthenticatedUser() {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const { data, error } = await client.auth.getUser();
+  if (error) throw error;
+  return data.user || null;
+}
+
 export async function signInWithPassword({ email, password }) {
   const client = getSupabaseClient();
   if (!client) throw new Error("Supabase is not configured.");
