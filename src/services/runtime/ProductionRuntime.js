@@ -12,6 +12,28 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   let isPersistingSnapshot = false;
   let activeAuthUserId = null;
   let authTransitionInFlight = false;
+  let authGateTimer = null;
+
+  const clearAuthGateTimer = () => {
+    if (!authGateTimer) return;
+    window.clearTimeout(authGateTimer);
+    authGateTimer = null;
+  };
+
+  const scheduleAuthGateMount = (runtime) => {
+    clearAuthGateTimer();
+    authGateTimer = window.setTimeout(async () => {
+      const { session: recoveredSession, user: recoveredUser } = await getSession();
+      runtime.auth.session = recoveredSession;
+      runtime.auth.user = recoveredUser;
+      if (recoveredUser) {
+        activeAuthUserId = recoveredUser.id;
+        unmountAuthGate();
+        return;
+      }
+      mountAuthGate(runtime);
+    }, 900);
+  };
 
   const flushWorkspaceSnapshot = async () => {
     if (!runtime.auth.user || !isSupabaseConfigured() || !queuedSnapshot || isPersistingSnapshot) return;
@@ -92,7 +114,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   });
 
   if (ENV.requireAuth && !user) {
-    mountAuthGate(runtime);
+    scheduleAuthGateMount(runtime);
   }
 
   runtime.unsubscribeAuth = onAuthStateChange(async (nextSession) => {
@@ -101,6 +123,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     const nextUserId = nextSession?.user?.id || null;
     if (authTransitionInFlight) return;
     if (ENV.requireAuth && nextSession?.user) {
+      clearAuthGateTimer();
       if (activeAuthUserId === nextUserId) {
         unmountAuthGate();
         return;
@@ -119,7 +142,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }
     if (ENV.requireAuth && !nextSession?.user) {
       activeAuthUserId = null;
-      mountAuthGate(runtime);
+      scheduleAuthGateMount(runtime);
     }
   });
 
