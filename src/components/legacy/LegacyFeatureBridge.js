@@ -4079,7 +4079,7 @@ function openMarketComposerForProfile(profileId = null) {
         <span>Tools</span>
         <input id="marketPostToolsInput" class="modal-input" type="text" value="${escapeAttr(tools)}" placeholder="ForgeBook, Roblox Studio, Figma" />
       </label>
-      <p id="marketPostErrorText" class="auth-gate-error hidden"></p>
+      <div id="marketPostErrorText" class="market-post-error hidden" role="alert" aria-live="polite"></div>
       <div class="document-card-actions">
         <button id="saveMarketPostButton" class="primary-button" type="button">${existing ? "Update Post" : "Publish Post"}</button>
       </div>
@@ -4091,6 +4091,7 @@ function openMarketComposerForProfile(profileId = null) {
     if (errorBox) {
       errorBox.textContent = "";
       errorBox.classList.add("hidden");
+      errorBox.style.display = "none";
     }
     if (!runtimeUser?.id) {
       showToast("Sign in required to publish a market post", "warning");
@@ -4150,7 +4151,9 @@ function openMarketComposerForProfile(profileId = null) {
       if (errorBox) {
         errorBox.textContent = details || "Could not publish market post";
         errorBox.classList.remove("hidden");
+        errorBox.style.display = "block";
       }
+      window.alert(details || "Could not publish market post");
       showToast(details || "Could not publish market post", "warning");
     }
   });
