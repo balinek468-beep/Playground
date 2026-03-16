@@ -175,7 +175,7 @@ create table if not exists public.notifications (
 );
 
 create table if not exists public.marketplace_profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   nickname text not null,
   display_name text not null,

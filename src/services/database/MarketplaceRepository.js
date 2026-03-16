@@ -24,3 +24,14 @@ export async function upsertMarketplaceProfile(profile) {
   if (error) throw error;
   return data;
 }
+
+export async function deleteMarketplaceProfile(profileId, userId) {
+  const client = getSupabaseClient();
+  if (!client || !profileId || !userId) return;
+  const { error } = await client
+    .from(ENV.marketTable)
+    .delete()
+    .eq("id", profileId)
+    .eq("user_id", userId);
+  if (error) throw error;
+}

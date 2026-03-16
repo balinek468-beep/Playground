@@ -25,7 +25,7 @@ import {
 import { ensureMarketPage } from "../market/MarketPage.js";
 import { renderSettingsPage } from "../settings/SettingsPage.js";
 import { filterLegacyMockMarketProfiles } from "../../utils/marketProfiles.js";
-import { fetchMarketplaceProfiles, upsertMarketplaceProfile } from "../../services/database/MarketplaceRepository.js";
+import { deleteMarketplaceProfile, fetchMarketplaceProfiles, upsertMarketplaceProfile } from "../../services/database/MarketplaceRepository.js";
 import {
   acceptFriendRequest,
   cancelFriendRequest,
@@ -1843,6 +1843,7 @@ function renderMarket() {
   if (els.marketOpenCount) els.marketOpenCount.textContent = String(filtered.filter((profile) => profile.availability === "Open to offers").length);
   els.marketCards.innerHTML = "";
   filtered.forEach((profile) => {
+    const isOwnPost = profile.userId === state.profile.userId;
     const card = document.createElement("article");
     card.className = "market-card premium-surface";
     card.innerHTML = `
@@ -1863,6 +1864,8 @@ function renderMarket() {
       <div class="document-card-actions">
         <button class="secondary-button" type="button" data-market-message="${escapeAttr(profile.id)}">Message</button>
         <button class="secondary-button" type="button" data-market-add="${escapeAttr(profile.id)}">Add Friend</button>
+        ${isOwnPost ? `<button class="secondary-button" type="button" data-market-edit="${escapeAttr(profile.id)}">Edit</button>` : ""}
+        ${isOwnPost ? `<button class="secondary-button destructive" type="button" data-market-delete="${escapeAttr(profile.id)}">Delete</button>` : ""}
       </div>
     `;
     card.addEventListener("click", () => openMarketProfile(profile.id));
@@ -1880,11 +1883,35 @@ function renderMarket() {
       addMarketProfileAsFriend(button.dataset.marketMessage, true);
     });
   });
+  document.querySelectorAll("[data-market-edit]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openMarketComposerForProfile(button.dataset.marketEdit);
+    });
+  });
+  document.querySelectorAll("[data-market-delete]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const runtimeUser = activeRuntimeUser();
+      if (!runtimeUser?.id) return;
+      try {
+        await deleteMarketplaceProfile(button.dataset.marketDelete, runtimeUser.id);
+        state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.id !== button.dataset.marketDelete);
+        save();
+        await refreshMarketProfilesFromCloud({ rerender: true });
+        showToast("Market post deleted");
+      } catch (error) {
+        console.error("Failed to delete market post", error);
+        showToast("Could not delete market post", "warning");
+      }
+    });
+  });
 }
 
 function openMarketProfile(profileId) {
   const profile = (state.marketProfiles || []).find((entry) => entry.id === profileId);
   if (!profile || !els.overlayBody || !els.overlayEyebrow || !els.overlayTitle) return;
+  const isOwnPost = profile.userId === state.profile.userId;
   els.overlayCard?.classList.remove("overlay-card-chat", "overlay-card-profile");
   els.overlayCard?.classList.add("overlay-card-market");
   els.overlayPanel?.classList.remove("hidden");
@@ -1916,6 +1943,8 @@ function openMarketProfile(profileId) {
           <div class="document-card-actions">
             <button id="marketProfileMessageButton" class="secondary-button" type="button">Message</button>
             <button id="marketProfileAddButton" class="secondary-button" type="button">Add Friend</button>
+            ${isOwnPost ? `<button id="marketProfileEditButton" class="secondary-button" type="button">Edit Post</button>` : ""}
+            ${isOwnPost ? `<button id="marketProfileDeleteButton" class="secondary-button destructive" type="button">Delete Post</button>` : ""}
           </div>
         </section>
         <section class="overlay-section">
@@ -1935,6 +1964,23 @@ function openMarketProfile(profileId) {
   `;
   on("#marketProfileMessageButton", "click", () => addMarketProfileAsFriend(profile.id, true));
   on("#marketProfileAddButton", "click", () => addMarketProfileAsFriend(profile.id, false));
+  on("#marketProfileEditButton", "click", () => openMarketComposerForProfile(profile.id));
+  on("#marketProfileDeleteButton", "click", async () => {
+    const runtimeUser = activeRuntimeUser();
+    if (!runtimeUser?.id) return;
+    try {
+      await deleteMarketplaceProfile(profile.id, runtimeUser.id);
+      state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.id !== profile.id);
+      save();
+      await refreshMarketProfilesFromCloud({ rerender: true });
+      closeOverlay();
+      renderMarket();
+      showToast("Market post deleted");
+    } catch (error) {
+      console.error("Failed to delete market profile", error);
+      showToast("Could not delete market post", "warning");
+    }
+  });
 }
 
 function fileVaultEntries() {
@@ -3960,7 +4006,16 @@ function legacyAddMarketProfileAsFriend(profileId, openMessage = false) {
 }
 
 function openMarketComposer() {
-  const existing = (state.marketProfiles || []).find((entry) => entry.userId === state.profile.userId);
+  openMarketComposerForProfile(null);
+}
+
+function marketPostId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return uid();
+}
+
+function openMarketComposerForProfile(profileId = null) {
+  const existing = profileId ? (state.marketProfiles || []).find((entry) => entry.id === profileId) : null;
   els.overlayCard?.classList.remove("overlay-card-chat", "overlay-card-profile");
   els.overlayCard?.classList.add("overlay-card-market");
   els.overlayPanel?.classList.remove("hidden");
@@ -4027,7 +4082,7 @@ function openMarketComposer() {
       return;
     }
     const payload = {
-      id: runtimeUser.id,
+      id: existing?.id || marketPostId(),
       userId: runtimeUser.id,
       nickname: $("#marketPostNicknameInput")?.value.trim() || state.profile.name,
       displayName: $("#marketPostDisplayInput")?.value.trim() || state.profile.name,
@@ -4042,7 +4097,7 @@ function openMarketComposer() {
       avatar: state.profile.avatar || "",
     };
     const dbPayload = {
-      id: runtimeUser.id,
+      id: payload.id,
       user_id: runtimeUser.id,
       nickname: payload.nickname,
       display_name: payload.displayName,
@@ -4060,7 +4115,7 @@ function openMarketComposer() {
     };
     try {
       const savedProfile = await upsertMarketplaceProfile(dbPayload);
-      state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.userId !== runtimeUser.id);
+      state.marketProfiles = (state.marketProfiles || []).filter((entry) => entry.id !== payload.id);
       state.marketProfiles.unshift(mapMarketProfileRecord(savedProfile || dbPayload));
       save();
       pushNotification("market", "Market profile published", `${payload.nickname} is now visible in the market.`, {
