@@ -16,6 +16,21 @@ export async function fetchMarketplaceProfiles() {
 export async function upsertMarketplaceProfile(profile) {
   const client = getSupabaseClient();
   if (!client) return null;
+  const sanitizePayload = (payload) => ({
+    id: payload.id,
+    user_id: payload.user_id,
+    nickname: payload.nickname,
+    display_name: payload.display_name,
+    role: payload.role,
+    bio: payload.bio ?? "",
+    availability_status: payload.availability_status ?? "Open to offers",
+    experience_level: payload.experience_level ?? "Mid",
+    hourly_rate: payload.hourly_rate ?? null,
+    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    tools: Array.isArray(payload.tools) ? payload.tools : [],
+    portfolio: Array.isArray(payload.portfolio) ? payload.portfolio : [],
+    updated_at: payload.updated_at || new Date().toISOString(),
+  });
   const attemptUpsert = async (payload) => {
     const { data, error } = await client
       .from(ENV.marketTable)
@@ -25,8 +40,9 @@ export async function upsertMarketplaceProfile(profile) {
     if (error) throw error;
     return data;
   };
+  const basePayload = sanitizePayload(profile);
   try {
-    return await attemptUpsert(profile);
+    return await attemptUpsert(basePayload);
   } catch (error) {
     const message = String(error?.message || "").toLowerCase();
     const details = String(error?.details || "").toLowerCase();
@@ -34,10 +50,10 @@ export async function upsertMarketplaceProfile(profile) {
       message.includes("foreign key") ||
       details.includes("foreign key") ||
       message.includes("marketplace_profiles_id_fkey");
-    if (!looksLikeLegacySinglePostSchema || !profile?.user_id) throw error;
+    if (!looksLikeLegacySinglePostSchema || !basePayload?.user_id) throw error;
     const legacyPayload = {
-      ...profile,
-      id: profile.user_id,
+      ...basePayload,
+      id: basePayload.user_id,
     };
     return await attemptUpsert(legacyPayload);
   }

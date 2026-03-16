@@ -4118,9 +4118,7 @@ function openMarketComposerForProfile(profileId = null) {
       tags: payload.tags,
       tools: payload.tools,
       portfolio: payload.portfolio,
-      featured_skills: payload.tags,
-      collaboration_preferences: "",
-      compensation_preference: payload.rate || "Negotiable",
+      updated_at: new Date().toISOString(),
     };
     try {
       const savedProfile = await upsertMarketplaceProfile(dbPayload);
