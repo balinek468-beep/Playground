@@ -229,6 +229,7 @@ let draggedSheetTableId = null;
 let draggedSheetDropMarker = null;
 let draggedBoardCard = null;
 let sheetAutoScrollState = null;
+let vaultAutoScrollState = null;
 let isEditingSheetFormula = false;
 let workspaceSearch = "";
 let lastSavedAt = null;
@@ -1375,6 +1376,7 @@ function drawBranch(container, parentId, depth) {
     });
     button.addEventListener("dragend", () => {
       draggedTreeNodeId = null;
+      stopVaultAutoScroll();
       button.classList.remove("is-dragging");
       clearTreeDropTargets();
     });
@@ -1684,6 +1686,7 @@ function handleTreeFolderDragOver(event, folderId, button) {
   if (!draggedTreeNodeId || !canMoveNodeToParent(draggedTreeNodeId, folderId)) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = "move";
+  updateVaultAutoScroll(event.clientY);
   button.classList.add("is-drop-target");
 }
 
@@ -1691,6 +1694,7 @@ function handleTreeFolderDrop(event, folderId, button) {
   if (!draggedTreeNodeId) return;
   event.preventDefault();
   event.stopPropagation();
+  stopVaultAutoScroll();
   button.classList.remove("is-drop-target");
   moveNodeToParent(draggedTreeNodeId, folderId);
 }
@@ -1700,6 +1704,7 @@ function handleVaultRootDragOver(event) {
   if (!draggedTreeNodeId || !vault || !canMoveNodeToParent(draggedTreeNodeId, vault.id)) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = "move";
+  updateVaultAutoScroll(event.clientY);
   if (!event.target.closest(".tree-button.folder")) {
     els.vaultContentsTree?.classList.add("is-drop-target");
   }
@@ -2821,6 +2826,7 @@ function attachFileToActiveContext(file) {
 function handleVaultRootDragLeave(event) {
   if (!els.vaultContentsTree) return;
   if (event.currentTarget.contains(event.relatedTarget)) return;
+  stopVaultAutoScroll();
   els.vaultContentsTree.classList.remove("is-drop-target");
 }
 
@@ -2828,14 +2834,56 @@ function handleVaultRootDrop(event) {
   const vault = selectedVault();
   if (!draggedTreeNodeId || !vault || event.target.closest(".tree-button.folder")) return;
   event.preventDefault();
+  stopVaultAutoScroll();
   moveNodeToParent(draggedTreeNodeId, vault.id);
   clearTreeDropTargets();
 }
 
 function clearTreeDropTargets() {
+  stopVaultAutoScroll();
   els.vaultContentsTree?.classList.remove("is-drop-target");
   els.vaultContentsTree?.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
   els.vaultContentsTree?.querySelectorAll(".is-dragging").forEach((node) => node.classList.remove("is-dragging"));
+}
+
+function updateVaultAutoScroll(clientY) {
+  const scroller = els.vaultContentsTree?.closest("#vaultTreePanel") || els.vaultContentsTree;
+  if (!scroller) return;
+  const rect = scroller.getBoundingClientRect();
+  const edge = 72;
+  const maxSpeed = 16;
+  let delta = 0;
+  if (clientY < rect.top + edge) {
+    delta = -Math.ceil(((rect.top + edge - clientY) / edge) * maxSpeed);
+  } else if (clientY > rect.bottom - edge) {
+    delta = Math.ceil(((clientY - (rect.bottom - edge)) / edge) * maxSpeed);
+  }
+  if (!delta) {
+    stopVaultAutoScroll();
+    return;
+  }
+  if (!vaultAutoScrollState) {
+    vaultAutoScrollState = { delta, raf: 0, scroller };
+  } else {
+    vaultAutoScrollState.delta = delta;
+    vaultAutoScrollState.scroller = scroller;
+  }
+  if (vaultAutoScrollState.raf) return;
+  const tick = () => {
+    if (!vaultAutoScrollState || !draggedTreeNodeId) {
+      stopVaultAutoScroll();
+      return;
+    }
+    vaultAutoScrollState.scroller.scrollBy({ top: vaultAutoScrollState.delta, behavior: "auto" });
+    vaultAutoScrollState.raf = window.requestAnimationFrame(tick);
+  };
+  vaultAutoScrollState.raf = window.requestAnimationFrame(tick);
+}
+
+function stopVaultAutoScroll() {
+  if (!vaultAutoScrollState) return;
+  if (vaultAutoScrollState.raf) window.cancelAnimationFrame(vaultAutoScrollState.raf);
+  vaultAutoScrollState = null;
 }
 
 function renameVault(vaultId) {
