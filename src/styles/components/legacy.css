@@ -6018,6 +6018,28 @@ select.modal-input optgroup {
   box-shadow: none;
 }
 
+.workspace-view[data-doc-type="text"] .context-panel,
+.workspace-view.context-collapsed[data-doc-type="text"] .context-panel {
+  background: #12161f;
+  backdrop-filter: none;
+}
+
+.workspace-view[data-doc-type="text"] .context-panel::before,
+.workspace-view[data-doc-type="text"] .context-panel::after,
+.workspace-view.context-collapsed[data-doc-type="text"] .context-panel::before,
+.workspace-view.context-collapsed[data-doc-type="text"] .context-panel::after,
+#contextPanel::before,
+#contextPanel::after,
+#contextPanel.motion-static::before,
+#contextPanel.motion-static::after,
+#contextPanel.premium-surface::before,
+#contextPanel.premium-surface::after {
+  display: none !important;
+  content: none !important;
+  background: none !important;
+  opacity: 0 !important;
+}
+
 .workspace-view[data-doc-type="text"][data-writing-width="1"] .editor-floating-layer,
 .workspace-view.context-collapsed[data-doc-type="text"][data-writing-width="1"] .editor-floating-layer {
   inset-inline: max(18px, calc((100% - 860px) / 2));
