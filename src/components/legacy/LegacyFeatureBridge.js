@@ -711,7 +711,7 @@ function openCreditsModal() {
   openModal({
     eyebrow: "ForgeBook",
     title: "Credits & Contact",
-    message: `Main creator: Balin\nDiscord: balinbaby\nDiscord ID: 796162367821578281\n\nFeature ideas and feedback: Kami\nNickname: kam1._.1.\nDiscord ID: 770655407588376668\n\nUse Discord to report bugs or suggest changes for ForgeBook.`,
+    message: `Main creator: Balin\nDiscord: balinbaby\nDiscord ID: 796162367821578281\n\nFeature ideas and feedback: Kami\nNickname: kam1._.1.\nDiscord ID: 770655407588376668\n\nOfficial ForgeBook Discord:\nhttps://discord.gg/vZuqbnpdQn\n\nUse Discord to report bugs or suggest changes for ForgeBook.`,
     confirmLabel: "Close",
     onConfirm: () => true,
   });
