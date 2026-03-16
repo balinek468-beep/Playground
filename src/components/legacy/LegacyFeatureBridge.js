@@ -2400,7 +2400,12 @@ function renderStorageList(container, doc = activeDoc()) {
         </div>
       </article>
     `;
-  }).join("") : `<div class="empty-state">Upload any project file type here and organize it into folders, tags, and categories.</div>`;
+  }).join("") : `
+    <div class="storage-empty-state">
+      <strong>No files in this view yet</strong>
+      <p>Upload files here, drop them into folders, and switch back to <strong>All</strong> if a smart view is hiding them.</p>
+    </div>
+  `;
 }
 
 function renderStorageDetail(container, doc = activeDoc(), mode = "workspace") {
@@ -2440,13 +2445,20 @@ function renderStorageDetail(container, doc = activeDoc(), mode = "workspace") {
         <div class="context-link-card"><span>Updated</span><strong>${escape(new Date(selected.updatedAt || Date.now()).toLocaleString())}</strong></div>
       </div>
     </div>
-  ` : `<div class="empty-state">Select a file to preview metadata, download it, tag it, or move it into a better folder.</div>`;
+  ` : `
+    <div class="storage-detail-empty">
+      <strong>Nothing selected</strong>
+      <p>Select a file to preview metadata, rename it, tag it, move it, or download it.</p>
+      <p>Tip: use the checkboxes for bulk actions, or click a folder on the left to narrow the browser.</p>
+    </div>
+  `;
 }
 
 function renderStorageFolderButtons(container, doc = activeDoc()) {
   if (!container) return;
   const selection = storageSelectionState(doc);
   const activeFolderId = selection.activeFolderId || null;
+  const activeFilter = selection.activeFilter || "all";
   const roots = storageFolders().filter((folder) => !folder.parentId && !folder.archived);
   const renderBranch = (folder, depth = 0) => {
     const childrenMarkup = storageFolders()
@@ -2454,7 +2466,7 @@ function renderStorageFolderButtons(container, doc = activeDoc()) {
       .map((entry) => renderBranch(entry, depth + 1))
       .join("");
     return `
-      <button class="storage-folder-button ${activeFolderId === folder.id ? "active" : ""}" type="button" data-storage-folder="${escapeAttr(folder.id)}" style="padding-left:${12 + depth * 18}px">
+      <button class="storage-folder-button ${activeFilter === "all" && activeFolderId === folder.id ? "active" : ""}" type="button" data-storage-folder="${escapeAttr(folder.id)}" style="padding-left:${12 + depth * 18}px">
         <span>${folder.pinned ? "PIN" : "DIR"}</span>
         <strong>${escape(folder.name)}</strong>
       </button>
@@ -2462,7 +2474,7 @@ function renderStorageFolderButtons(container, doc = activeDoc()) {
     `;
   };
   container.innerHTML = `
-    <button class="storage-folder-button ${!activeFolderId ? "active" : ""}" type="button" data-storage-folder="">
+    <button class="storage-folder-button ${activeFilter === "all" && !activeFolderId ? "active" : ""}" type="button" data-storage-folder="">
       <span>ALL</span>
       <strong>Root Storage</strong>
     </button>
@@ -2507,7 +2519,12 @@ function renderStorageWorkspace() {
     button.classList.toggle("active", button.dataset.storageDensity === (doc.storage.density || "comfortable"));
   });
   if (els.storageBreadcrumbs) {
-    els.storageBreadcrumbs.innerHTML = storageFolderPath(doc.storage.activeFolderId).map((crumb) => `<button class="storage-crumb ${crumb.id === doc.storage.activeFolderId ? "active" : ""}" type="button" data-storage-folder="${escapeAttr(crumb.id || "")}">${escape(crumb.name)}</button>`).join("<span>/</span>");
+    if ((doc.storage.activeFilter || "all") !== "all") {
+      const currentView = storageViewOptions().find((view) => view.id === (doc.storage.activeFilter || "all"));
+      els.storageBreadcrumbs.innerHTML = `<span class="storage-crumb active">${escape(currentView?.name || "Filtered View")}</span>`;
+    } else {
+      els.storageBreadcrumbs.innerHTML = storageFolderPath(doc.storage.activeFolderId).map((crumb) => `<button class="storage-crumb ${crumb.id === doc.storage.activeFolderId ? "active" : ""}" type="button" data-storage-folder="${escapeAttr(crumb.id || "")}">${escape(crumb.name)}</button>`).join("<span>/</span>");
+    }
   }
   if (els.storageSidebarViews) {
     const activeFilter = doc.storage.activeFilter || "all";
@@ -2569,6 +2586,8 @@ function bindStorageBrowserEvents(mode = "workspace") {
     button.addEventListener("click", () => {
       const selection = storageSelectionState(mode === "workspace" ? doc : null);
       selection.activeFilter = button.dataset.storageFilter || "all";
+      selection.activeFolderId = null;
+      setStorageSelection([], mode === "workspace" ? doc : null);
       if (mode === "overlay") state.fileVault.activeView = selection.activeFilter;
       save();
       rerender();
@@ -2577,7 +2596,9 @@ function bindStorageBrowserEvents(mode = "workspace") {
   document.querySelectorAll("[data-storage-folder]").forEach((button) => {
     button.addEventListener("click", () => {
       const selection = storageSelectionState(mode === "workspace" ? doc : null);
+      selection.activeFilter = "all";
       selection.activeFolderId = button.dataset.storageFolder || null;
+      setStorageSelection([], mode === "workspace" ? doc : null);
       save();
       rerender();
     });
@@ -2894,6 +2915,11 @@ function handleFileVaultUpload(event) {
   const files = [...(event.target.files || [])];
   if (!files.length) return;
   const contextDoc = activeDoc();
+  if (contextDoc?.docType === "storage") {
+    normalizeStorageDoc(contextDoc);
+    contextDoc.storage.activeFilter = "all";
+    contextDoc.storage.activeFolderId = fileVaultUploadContext?.folderId || contextDoc.storage.activeFolderId || null;
+  }
   const contextFolderId = fileVaultUploadContext?.folderId || (contextDoc?.docType === "storage" ? contextDoc.storage.activeFolderId : state.fileVault.activeFolderId) || null;
   files.forEach((file) => {
     const reader = new FileReader();
