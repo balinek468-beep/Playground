@@ -8,6 +8,7 @@ import { fetchWorkspaceSnapshot, persistWorkspaceSnapshot } from "../database/Wo
 
 const AUTH_RESTORE_STORAGE_KEY = "forgebook.auth.restore";
 const AUTH_RESTORE_WINDOW_MS = 1000 * 60 * 60 * 24 * 14;
+const MIN_PRODUCTION_SYNC_INTERVAL_MS = 12000;
 
 export async function initProductionRuntime({ createBaseStateSnapshot }) {
   let queuedSnapshot = null;
@@ -111,9 +112,14 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }
   };
 
+  const effectiveWorkspaceSyncIntervalMs = Math.max(
+    Number(ENV.workspaceSyncIntervalMs) || 0,
+    MIN_PRODUCTION_SYNC_INTERVAL_MS,
+  );
+
   const scheduleWorkspaceFlush = debounce(() => {
     void flushWorkspaceSnapshot();
-  }, ENV.workspaceSyncIntervalMs);
+  }, effectiveWorkspaceSyncIntervalMs);
 
   const runtime = {
     mode: isSupabaseConfigured() ? "supabase" : "local",
@@ -128,6 +134,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     persistence: {
       async persistWorkspaceSnapshot(snapshot) {
         if (!runtime.auth.user || !isSupabaseConfigured()) return;
+        if (snapshot === lastPersistedSnapshot || snapshot === queuedSnapshot) return;
         queuedSnapshot = snapshot;
         scheduleWorkspaceFlush();
       },
