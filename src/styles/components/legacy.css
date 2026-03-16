@@ -6022,6 +6022,10 @@ select.modal-input optgroup {
 .workspace-view.context-collapsed[data-doc-type="text"] .context-panel {
   background: #12161f;
   backdrop-filter: none;
+  overflow: hidden;
+  isolation: isolate;
+  contain: paint;
+  box-shadow: none;
 }
 
 .workspace-view[data-doc-type="text"] .context-panel::before,
@@ -6038,6 +6042,12 @@ select.modal-input optgroup {
   content: none !important;
   background: none !important;
   opacity: 0 !important;
+}
+
+.workspace-view[data-doc-type="text"] .context-section,
+.workspace-view.context-collapsed[data-doc-type="text"] .context-section {
+  overflow: hidden;
+  isolation: isolate;
 }
 
 .workspace-view[data-doc-type="text"][data-writing-width="1"] .editor-floating-layer,
