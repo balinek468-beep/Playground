@@ -3200,7 +3200,7 @@ function openOverlay(mode) {
                 </div>
                 <div class="overlay-inline-actions">
                   <button id="openMessagesButton" class="secondary-button compact-action-button" type="button"><span class="button-icon">✉</span><span>Messages</span></button>
-                  <button id="addMockFriendButton" class="secondary-button" type="button">Add Contact</button>
+                  <button id="findProfileFriendButtonInline" class="secondary-button" type="button">Add Contact</button>
                 </div>
               </div>
               <label class="profile-field">
@@ -3555,6 +3555,8 @@ function bindProfileOverlay() {
   bindProfileField("#profileLayoutStyleInput", "layoutStyle");
   on("#openFriendsButton", "click", () => openOverlay("friends"));
   on("#openMessagesButton", "click", () => openOverlay("messages"));
+  on("#findProfileFriendButton", "click", findProfileFriendById);
+  on("#findProfileFriendButtonInline", "click", findProfileFriendById);
   on("#addProfileBlockButton", "click", addProfileBlock);
 }
 
@@ -3706,7 +3708,7 @@ function legacyRenderProfileFriendList() {
   host.innerHTML = "";
   const friends = Array.isArray(state.profile.friends) ? state.profile.friends : [];
   if (!friends.length) {
-    host.innerHTML = `<div class="empty-state">No connections yet. Add teammates by ID or create mock contacts first.</div>`;
+    host.innerHTML = `<div class="empty-state">No connections yet. Add teammates by ID to start building your network.</div>`;
     return;
   }
   friends.forEach((friend) => {
@@ -3741,22 +3743,6 @@ function legacyRenderProfileFriendList() {
       showToast("Connection removed");
     });
   });
-}
-
-function legacyAddMockFriendToProfile() {
-  const friend = {
-    id: uid(),
-    userId: randomUserId(),
-    name: `Designer ${state.profile.friends.length + 1}`,
-    role: "Game Designer",
-    status: "Online",
-    avatar: "",
-  };
-  if (!Array.isArray(state.profile.friends)) state.profile.friends = [];
-  state.profile.friends.push(friend);
-  save();
-  renderProfileFriendList();
-  showToast("Contact added");
 }
 
 function legacyFindProfileFriendById() {
@@ -3939,7 +3925,6 @@ function legacyRenderFriendsOverlay() {
           <article class="stats-card"><span>Requests</span><strong>${requests.length}</strong></article>
         </div>
         <div class="overlay-inline-actions friends-quick-actions">
-          <button id="friendsAddMockButton" class="secondary-button" type="button">Add Mock Friend</button>
           <button id="friendsOpenMessagesButton" class="secondary-button" type="button">Open Messages</button>
         </div>
       </aside>
@@ -3982,11 +3967,6 @@ function legacyRenderFriendsOverlay() {
   on("#friendsSearchInput", "input", (event) => {
     friendsSearch = event.target.value.trim().toLowerCase();
     renderFriendRows();
-  });
-  on("#friendsAddMockButton", "click", () => {
-    addMockFriendToProfile();
-    pushNotification("friend", "New connection", "A collaborator was added to your network.");
-    renderFriendsOverlay();
   });
   on("#friendsOpenMessagesButton", "click", () => openOverlay("messages"));
   on("#friendsSearchButton", "click", () => {
@@ -4164,18 +4144,6 @@ function createFriendProfile(seed = {}) {
   };
 }
 
-function addMockIncomingRequest() {
-  const request = createFriendProfile({
-    name: `Producer ${(state.profile.friendRequests || []).length + 1}`,
-    role: "Producer",
-    status: "Pending request",
-    bio: "Looking for collaborators on game direction, planning, and delivery.",
-  });
-  state.profile.friendRequests = [request, ...(state.profile.friendRequests || []).filter((entry) => entry.userId !== request.userId)];
-  save();
-  pushNotification("friend", "New friend request", `${request.name} sent you a friend request.`);
-}
-
 function openFriendProfileOverlay(profileId, source = "friends") {
   const entry =
     (state.profile.friends || []).find((friend) => friend.id === profileId || friend.userId === profileId) ||
@@ -4294,7 +4262,7 @@ function renderProfileFriendList() {
   host.innerHTML = "";
   const friends = Array.isArray(state.profile.friends) ? state.profile.friends : [];
   if (!friends.length) {
-    host.innerHTML = `<div class="empty-state">No connections yet. Add teammates by ID or create mock contacts first.</div>`;
+    host.innerHTML = `<div class="empty-state">No connections yet. Add teammates by ID to start building your network.</div>`;
     return;
   }
   friends.forEach((friend) => {
@@ -4333,20 +4301,6 @@ function renderProfileFriendList() {
       showToast("Connection removed");
     });
   });
-}
-
-function addMockFriendToProfile() {
-  const friend = createFriendProfile({
-    name: `Designer ${state.profile.friends.length + 1}`,
-    role: "Game Designer",
-    status: "Online",
-    bio: "Focused on design docs, planning, and production handoff.",
-  });
-  if (!Array.isArray(state.profile.friends)) state.profile.friends = [];
-  state.profile.friends.push(friend);
-  save();
-  renderProfileFriendList();
-  showToast("Contact added");
 }
 
 function findProfileFriendById() {
@@ -4447,8 +4401,6 @@ function renderFriendsOverlay() {
           <article class="stats-card"><span>Requests</span><strong>${requests.length}</strong></article>
         </div>
         <div class="overlay-inline-actions friends-quick-actions">
-          <button id="friendsAddMockButton" class="secondary-button" type="button">Add Mock Friend</button>
-          <button id="friendsAddMockRequestButton" class="secondary-button" type="button">Mock Request</button>
           <button id="friendsOpenMessagesButton" class="secondary-button" type="button">Open Messages</button>
         </div>
       </aside>
@@ -4491,16 +4443,6 @@ function renderFriendsOverlay() {
   on("#friendsSearchInput", "input", (event) => {
     friendsSearch = event.target.value.trim().toLowerCase();
     renderFriendRows();
-  });
-  on("#friendsAddMockButton", "click", () => {
-    addMockFriendToProfile();
-    pushNotification("friend", "New connection", "A collaborator was added to your network.");
-    renderFriendsOverlay();
-  });
-  on("#friendsAddMockRequestButton", "click", () => {
-    addMockIncomingRequest();
-    friendsTab = "requests";
-    renderFriendsOverlay();
   });
   on("#friendsOpenMessagesButton", "click", () => openOverlay("messages"));
   on("#friendsSearchButton", "click", () => {
@@ -5543,7 +5485,7 @@ function normalize() {
   if (!Array.isArray(state.profile.friendRequests)) state.profile.friendRequests = [];
   if (!Array.isArray(state.profile.sentRequests)) state.profile.sentRequests = [];
   if (!Array.isArray(state.profile.blockedUsers)) state.profile.blockedUsers = [];
-  if (!Array.isArray(state.marketProfiles) || !state.marketProfiles.length) state.marketProfiles = defaultMarketProfiles();
+  if (!Array.isArray(state.marketProfiles)) state.marketProfiles = [];
   state.settings = deepMerge(createDefaultSettings(), state.settings && typeof state.settings === "object" ? state.settings : {});
   state.settingsMeta = deepMerge(createDefaultSettingsMeta(), state.settingsMeta && typeof state.settingsMeta === "object" ? state.settingsMeta : {});
   syncSettingsAliases();

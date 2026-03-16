@@ -1,4 +1,3 @@
-import { defaultMarketProfiles } from "../data/mockData.js";
 import { APP_NAME, APP_VIEWS } from "../utils/constants.js";
 import { randomUserId, uid } from "../utils/helpers.js";
 
@@ -440,7 +439,7 @@ export function createDefaultStateSnapshot() {
       communities: [],
       workspaces: [],
     },
-    marketProfiles: defaultMarketProfiles(uid, randomUserId),
+    marketProfiles: [],
     notifications: [],
     starredItems: [],
     pinnedItems: [],
