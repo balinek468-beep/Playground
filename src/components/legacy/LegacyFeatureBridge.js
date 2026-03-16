@@ -33,6 +33,7 @@ import {
   fetchFriendNetwork,
   sendFriendRequest,
 } from "../../services/database/FriendRepository.js";
+import { fetchProfileByPublicId } from "../../services/database/ProfileRepository.js";
 import { collectLegacyElements } from "./LegacyViewMount.js";
 import { createCanvasRuntime } from "../../features/canvas/canvasRuntime.js";
 
@@ -202,12 +203,18 @@ let loadedWorkspace = loadWorkspaceState();
 let state = loadedWorkspace.state;
 diagnostics = loadedWorkspace.diagnostics;
 const runtimeUser = window.ForgeBookRuntime?.auth?.user;
+const runtimeProfile = window.ForgeBookRuntime?.data?.profile;
 if (runtimeUser) {
   state.profile.userId = runtimeUser.id;
   if (runtimeUser.email && !state.profile.email) state.profile.email = runtimeUser.email;
   if (runtimeUser.user_metadata?.name && (!state.profile.name || state.profile.name === "You")) {
     state.profile.name = runtimeUser.user_metadata.name;
   }
+}
+if (runtimeProfile?.profile_url) {
+  state.profile.publicId = runtimeProfile.profile_url;
+} else if (!state.profile.publicId && typeof state.profile.userId === "string" && state.profile.userId.startsWith("FG-")) {
+  state.profile.publicId = state.profile.userId;
 }
 if (Array.isArray(window.ForgeBookRuntime?.data?.marketProfiles) && window.ForgeBookRuntime.data.marketProfiles.length) {
   state.marketProfiles = filterLegacyMockMarketProfiles(window.ForgeBookRuntime.data.marketProfiles).map(mapMarketProfileRecord);
@@ -3347,7 +3354,7 @@ function openOverlay(mode) {
                   <h3>${escape(state.profile.name)}</h3>
                   <p>${escape(state.profile.role || "Designer")} | ${escape(state.profile.status || "Available")}</p>
                 </div>
-                <button id="copyProfileIdButton" class="secondary-button" type="button">${escape(state.profile.userId || randomUserId())}</button>
+                <button id="copyProfileIdButton" class="secondary-button" type="button">${escape(state.profile.publicId || state.profile.userId || randomUserId())}</button>
               </div>
               <p class="profile-bio-preview">${escape(state.profile.tagline || "")}</p>
             </div>
@@ -3595,7 +3602,7 @@ function renderProfileOverlay() {
                 <h3>${escape(state.profile.name)}</h3>
                 <p>${escape(state.profile.role || "Designer")} | ${escape(state.profile.status || "Available")}</p>
               </div>
-              <button id="copyProfileIdButton" class="secondary-button" type="button">${escape(state.profile.userId || randomUserId())}</button>
+              <button id="copyProfileIdButton" class="secondary-button" type="button">${escape(state.profile.publicId || state.profile.userId || randomUserId())}</button>
             </div>
             <p class="profile-bio-preview">${escape(state.profile.tagline || "")}</p>
           </div>
@@ -3746,7 +3753,7 @@ function bindProfileOverlay() {
   on("#changeAvatarButton", "click", () => openProfileMediaPicker("avatar"));
   on("#changeBannerButton", "click", () => openProfileMediaPicker("banner"));
   on("#copyProfileIdButton", "click", async () => {
-    const id = state.profile.userId || "";
+    const id = state.profile.publicId || state.profile.userId || "";
     try {
       await navigator.clipboard.writeText(id);
       showToast("Profile ID copied");
@@ -3930,7 +3937,7 @@ function legacyRenderProfileFriendList() {
       </div>
       <div class="profile-friend-copy">
         <strong>${escape(friend.name)}</strong>
-        <span>${escape(friend.role || "Collaborator")} | ${escape(friend.userId || "")}</span>
+        <span>${escape(friend.role || "Collaborator")} | ${escape(friend.publicId || friend.userId || "")}</span>
       </div>
       <div class="overlay-inline-actions">
         <button class="secondary-button compact-action-button" type="button" data-message-friend="${escapeAttr(friend.id)}"><span class="button-icon">✉</span><span>Message</span></button>
@@ -3960,7 +3967,7 @@ function legacyFindProfileFriendById() {
   if (!input) return;
   const query = input.value.trim().toUpperCase();
   if (!query) return;
-  const existing = (state.profile.friends || []).find((friend) => String(friend.userId || "").toUpperCase() === query);
+    const existing = (state.profile.friends || []).find((friend) => String(friend.publicId || friend.userId || "").toUpperCase() === query);
   if (existing) {
     showToast(`Found ${existing.name}`);
     return;
@@ -3987,7 +3994,9 @@ function legacyAddMarketProfileAsFriend(profileId, openMessage = false) {
   if (!friend) {
     friend = {
       id: uid(),
-      userId: profile.userId || randomUserId(),
+      userId: profile.userId || "",
+      publicId: profile.publicId || "",
+      accountId: profile.userId || "",
       name: profile.nickname,
       role: profile.role,
       status: profile.availability,
@@ -4265,7 +4274,7 @@ function legacyRenderFriendRows() {
       </div>
       <div class="friend-card-meta">
         <span>${escape(friend.status || "Online")}</span>
-        <span>${escape(friend.userId || "")}</span>
+        <span>${escape(friend.publicId || friend.userId || "")}</span>
       </div>
       <div class="overlay-inline-actions friend-card-actions">
         <button class="secondary-button compact-action-button" type="button" data-friend-message="${escapeAttr(friend.id)}">Message</button>
@@ -4283,7 +4292,7 @@ function legacyRenderFriendRows() {
         <div class="profile-friend-avatar"><span>${escape((request.name?.[0] || "R").toUpperCase())}</span></div>
         <div class="profile-friend-copy">
           <strong>${escape(request.name)}</strong>
-          <span>${escape(request.userId || "")}</span>
+          <span>${escape(request.publicId || request.userId || "")}</span>
         </div>
       </div>
       <div class="overlay-inline-actions friend-card-actions">
@@ -4299,7 +4308,7 @@ function legacyRenderFriendRows() {
         <div class="profile-friend-avatar"><span>${escape((request.name?.[0] || "S").toUpperCase())}</span></div>
         <div class="profile-friend-copy">
           <strong>${escape(request.name)}</strong>
-          <span>Sent request • ${escape(request.userId || "")}</span>
+          <span>Sent request • ${escape(request.publicId || request.userId || "")}</span>
         </div>
       </article>
     `).join("") || `<div class="empty-state">No sent requests.</div>`;
@@ -4372,7 +4381,9 @@ function createFriendProfile(seed = {}) {
   const baseBadges = Array.isArray(seed.badges) && seed.badges.length ? seed.badges : [role];
   return {
     id: seed.id || uid(),
-    userId: seed.userId || randomUserId(),
+    userId: seed.userId || "",
+    publicId: seed.publicId || seed.profileUrl || seed.userId || randomUserId(),
+    accountId: seed.accountId || seed.userId || "",
     name: seed.name || displayName,
     displayName,
     nickname: seed.nickname || displayName,
@@ -4417,7 +4428,7 @@ function openFriendProfileOverlay(profileId, source = "friends") {
           <div class="friend-profile-copy">
             <h3>${escape(profile.displayName || profile.name)}</h3>
             <p>${escape(profile.role)} | ${escape(profile.status)}</p>
-            <span class="friend-profile-id">${escape(profile.userId || "")}</span>
+            <span class="friend-profile-id">${escape(profile.publicId || profile.userId || "")}</span>
             <p class="profile-bio-preview">${escape(profile.tagline || "")}</p>
           </div>
           <div class="overlay-inline-actions friend-profile-actions">
@@ -4544,7 +4555,7 @@ function renderProfileFriendList() {
       </div>
       <div class="profile-friend-copy">
         <strong>${escape(friend.name)}</strong>
-        <span>${escape(friend.role || "Collaborator")} | ${escape(friend.userId || "")}</span>
+        <span>${escape(friend.role || "Collaborator")} | ${escape(friend.publicId || friend.userId || "")}</span>
       </div>
       <div class="overlay-inline-actions">
         <button class="secondary-button compact-action-button" type="button" data-view-friend-profile="${escapeAttr(friend.id)}"><span class="button-icon">◉</span><span>Profile</span></button>
@@ -4578,7 +4589,7 @@ function findProfileFriendById() {
   if (!input) return;
   const query = input.value.trim().toUpperCase();
   if (!query) return;
-  const existing = (state.profile.friends || []).find((friend) => String(friend.userId || "").toUpperCase() === query);
+  const existing = (state.profile.friends || []).find((friend) => String(friend.publicId || friend.userId || "").toUpperCase() === query);
   if (existing) {
     showToast(`Found ${existing.name}`);
     return;
@@ -4588,7 +4599,11 @@ function findProfileFriendById() {
     showToast("Sign in required to send requests", "warning");
     return;
   }
-  sendFriendRequest(runtimeUser.id, query)
+  fetchProfileByPublicId(query)
+    .then((profile) => {
+      if (!profile?.id) throw new Error("Profile not found");
+      return sendFriendRequest(runtimeUser.id, profile.id);
+    })
     .then(() => refreshFriendStateFromCloud())
     .then(() => {
       save();
@@ -4598,7 +4613,7 @@ function findProfileFriendById() {
     })
     .catch((error) => {
       console.error("Failed to send friend request by ID", error);
-      showToast("Could not send request", "warning");
+      showToast("Profile ID not found", "warning");
     });
 }
 
@@ -4613,7 +4628,9 @@ function addMarketProfileAsFriend(profileId, openMessage = false) {
   let friend = (state.profile.friends || []).find((entry) => entry.userId === profile.userId);
   if (!friend) {
     friend = createFriendProfile({
-      userId: profile.userId || randomUserId(),
+      userId: profile.userId || "",
+      publicId: profile.publicId || "",
+      accountId: profile.userId || "",
       name: profile.nickname,
       displayName: profile.displayName || profile.nickname,
       nickname: profile.nickname,
@@ -4746,7 +4763,11 @@ function renderFriendsOverlay() {
       showToast("Sign in required to send requests", "warning");
       return;
     }
-    sendFriendRequest(runtimeUser.id, query)
+    fetchProfileByPublicId(query)
+      .then((profile) => {
+        if (!profile?.id) throw new Error("Profile not found");
+        return sendFriendRequest(runtimeUser.id, profile.id);
+      })
       .then(() => refreshFriendStateFromCloud({ rerender: false }))
       .then(() => {
         save();
@@ -4756,7 +4777,7 @@ function renderFriendsOverlay() {
       })
       .catch((error) => {
         console.error("Failed to send friend request", error);
-        showToast("Could not send request", "warning");
+        showToast("Profile ID not found", "warning");
       });
   });
   renderFriendRows();
@@ -4786,7 +4807,7 @@ function renderFriendRows() {
       </div>
       <div class="friend-card-meta">
         <span>${escape(friend.status || "Online")}</span>
-        <span>${escape(friend.userId || "")}</span>
+        <span>${escape(friend.publicId || friend.userId || "")}</span>
       </div>
       <div class="overlay-inline-actions friend-card-actions">
         <button class="secondary-button compact-action-button" type="button" data-friend-view="${escapeAttr(friend.id)}">Profile</button>
@@ -4808,7 +4829,7 @@ function renderFriendRows() {
         </div>
         <div class="profile-friend-copy">
           <strong>${escape(request.name)}</strong>
-          <span>${escape(request.userId || "")}</span>
+          <span>${escape(request.publicId || request.userId || "")}</span>
         </div>
       </div>
       <div class="overlay-inline-actions friend-card-actions">
@@ -4833,7 +4854,7 @@ function renderFriendRows() {
         </div>
         <div class="profile-friend-copy">
           <strong>${escape(request.name)}</strong>
-          <span>Sent request • ${escape(request.userId || "")}</span>
+          <span>Sent request • ${escape(request.publicId || request.userId || "")}</span>
         </div>
         <div class="overlay-inline-actions friend-card-actions">
           <button class="secondary-button compact-action-button" type="button" data-sent-view="${escapeAttr(request.id)}">Profile</button>
@@ -7055,6 +7076,7 @@ function mapMarketProfileRecord(profile) {
   return {
     id: profile.id,
     userId: profile.user_id || profile.userId || profile.id,
+    publicId: profile.profile_url || profile.publicId || "",
     nickname: profile.nickname || profile.display_name || "Developer",
     displayName: profile.display_name || profile.displayName || profile.nickname || "Developer",
     role: profile.role || "Game Designer",
@@ -7079,6 +7101,8 @@ function mapFriendRecord(record, fallback = {}) {
   return createFriendProfile({
     id: record.id || fallback.id,
     userId: profile.id || fallback.userId || record.sender_id || record.receiver_id,
+    publicId: profile.profile_url || fallback.publicId || "",
+    accountId: profile.id || record.sender_id || record.receiver_id,
     name: profile.nickname || fallback.name || "Collaborator",
     displayName: profile.nickname || fallback.displayName || "Collaborator",
     nickname: profile.nickname || fallback.nickname || "Collaborator",
@@ -7159,7 +7183,9 @@ function vaultButton(vault) {
 }
 
 function profileStats() {
-  if (!state.profile.userId) state.profile.userId = randomUserId();
+  if (!state.profile.publicId) state.profile.publicId = state.profile.userId && String(state.profile.userId).startsWith("FG-")
+    ? state.profile.userId
+    : randomUserId();
   return {
     owned: vaults().filter((v) => v.owner === state.profile.name).length,
     joined: vaults().filter((v) => v.owner === state.profile.name || v.members.includes(state.profile.name)).length,

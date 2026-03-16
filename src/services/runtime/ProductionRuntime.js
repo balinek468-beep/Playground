@@ -142,6 +142,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     },
     data: {
       marketProfiles: [],
+      profile: null,
     },
   };
 
@@ -161,7 +162,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   if (user?.id) rememberAuthUser(user.id);
 
   if (user) {
-    await ensureProfile(user, createBaseStateSnapshot().profile);
+    runtime.data.profile = await ensureProfile(user, createBaseStateSnapshot().profile);
     const snapshot = await fetchWorkspaceSnapshot(user.id);
     if (snapshot) hydrateWorkspaceSnapshot(snapshot);
     try {
@@ -200,7 +201,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
       authTransitionInFlight = true;
       unmountAuthGate();
       try {
-        await ensureProfile(nextSession.user, createBaseStateSnapshot().profile);
+        runtime.data.profile = await ensureProfile(nextSession.user, createBaseStateSnapshot().profile);
         const snapshot = await fetchWorkspaceSnapshot(nextSession.user.id);
         if (snapshot) hydrateWorkspaceSnapshot(snapshot);
         activeAuthUserId = nextUserId;
