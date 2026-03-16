@@ -3774,6 +3774,21 @@ function renderProfileOverlay() {
           <section class="overlay-section">
             <div class="overlay-section-header">
               <div>
+                <p class="eyebrow">Account</p>
+                <h3>Session</h3>
+              </div>
+            </div>
+            <div class="overlay-inline-actions">
+              <button id="profileLogoutButton" class="secondary-button danger-button compact-action-button" type="button">
+                <span class="button-icon">⇠</span>
+                <span>Log Out</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="overlay-section">
+            <div class="overlay-section-header">
+              <div>
                 <p class="eyebrow">Portfolio Blocks</p>
                 <h3>Profile structure</h3>
               </div>
@@ -3814,6 +3829,16 @@ function bindProfileOverlay() {
   bindProfileField("#profileLayoutStyleInput", "layoutStyle");
   on("#openFriendsButton", "click", () => openOverlay("friends"));
   on("#openMessagesButton", "click", () => openOverlay("messages"));
+  on("#profileLogoutButton", "click", async () => {
+    try {
+      await window.ForgeBookRuntime?.auth?.signOut?.();
+    } catch (error) {
+      console.error("Failed to sign out", error);
+      showToast("Could not log out", "warning");
+      return;
+    }
+    window.location.assign("/login");
+  });
   on("#findProfileFriendButton", "click", findProfileFriendById);
   on("#findProfileFriendButtonInline", "click", findProfileFriendById);
   on("#addProfileBlockButton", "click", addProfileBlock);
