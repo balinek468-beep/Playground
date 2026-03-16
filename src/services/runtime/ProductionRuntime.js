@@ -10,6 +10,8 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   let queuedSnapshot = null;
   let lastPersistedSnapshot = null;
   let isPersistingSnapshot = false;
+  let activeAuthUserId = null;
+  let authTransitionInFlight = false;
 
   const flushWorkspaceSnapshot = async () => {
     if (!runtime.auth.user || !isSupabaseConfigured() || !queuedSnapshot || isPersistingSnapshot) return;
@@ -66,6 +68,7 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   const { session, user } = await getSession();
   runtime.auth.session = session;
   runtime.auth.user = user;
+  activeAuthUserId = user?.id || null;
 
   if (user) {
     await ensureProfile(user, createBaseStateSnapshot().profile);
@@ -95,14 +98,29 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
   runtime.unsubscribeAuth = onAuthStateChange(async (nextSession) => {
     runtime.auth.session = nextSession;
     runtime.auth.user = nextSession?.user || null;
+    const nextUserId = nextSession?.user?.id || null;
+    if (authTransitionInFlight) return;
     if (ENV.requireAuth && nextSession?.user) {
+      if (activeAuthUserId === nextUserId) {
+        unmountAuthGate();
+        return;
+      }
+      authTransitionInFlight = true;
       unmountAuthGate();
-      await ensureProfile(nextSession.user, createBaseStateSnapshot().profile);
-      const snapshot = await fetchWorkspaceSnapshot(nextSession.user.id);
-      if (snapshot) hydrateWorkspaceSnapshot(snapshot);
-      window.location.reload();
+      try {
+        await ensureProfile(nextSession.user, createBaseStateSnapshot().profile);
+        const snapshot = await fetchWorkspaceSnapshot(nextSession.user.id);
+        if (snapshot) hydrateWorkspaceSnapshot(snapshot);
+        activeAuthUserId = nextUserId;
+      } finally {
+        authTransitionInFlight = false;
+      }
+      return;
     }
-    if (ENV.requireAuth && !nextSession?.user) mountAuthGate(runtime);
+    if (ENV.requireAuth && !nextSession?.user) {
+      activeAuthUserId = null;
+      mountAuthGate(runtime);
+    }
   });
 
   return runtime;
