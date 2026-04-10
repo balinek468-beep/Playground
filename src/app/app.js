@@ -45,11 +45,6 @@ async function boot() {
   }
 
   if (route === "/app") {
-    if (!user) {
-      window.history.replaceState({}, "", "/login");
-      mountPublicApp({ route: "/login", user: null });
-      return;
-    }
     await bootProtectedApp();
     return;
   }
@@ -71,3 +66,5 @@ window.addEventListener("popstate", () => {
 });
 
 await boot();
+
+
