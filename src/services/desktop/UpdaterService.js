@@ -32,11 +32,13 @@ export async function initializeUpdater(options = {}) {
         result.checked = true;
         result.latestVersion = desktopResult.version;
         result.updateAvailable = compareVersions(desktopResult.version, currentVersion) > 0;
-        result.install = async () => {
-          await installUpdate({ version: desktopResult.version, url: desktopResult.url || desktopResult.downloadUrl || "" });
-          await restartApp();
-          return { ok: true };
-        };
+        if (result.updateAvailable) {
+          result.install = async () => {
+            await installUpdate({ version: desktopResult.version, url: desktopResult.url || desktopResult.downloadUrl || "" });
+            await restartApp();
+            return { ok: true };
+          };
+        }
         return result;
       }
     }

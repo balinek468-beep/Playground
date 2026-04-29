@@ -19,6 +19,7 @@ async function bootProtectedApp() {
     prepareLocalFirstWorkspaceBoot(),
     initializeUpdater({ currentVersion: "0.1.0" }),
   ]);
+  const vaultAPI = await import("../services/vault/vaultAPI.js");
 
   const productionRuntime = await initProductionRuntime({
     createBaseStateSnapshot,
@@ -27,6 +28,11 @@ async function bootProtectedApp() {
   window.ForgeBookRuntime = productionRuntime;
   window.ForgeBookUpdater = updater;
   window.ForgeBookVaultBoot = vaultBoot;
+  window.ForgeBookDesktopVaults = {
+    pickVaultFolder: vaultAPI.pickVaultFolder,
+    getRecentVaults: vaultAPI.getRecentVaults,
+    getVaultAppPaths: vaultAPI.getVaultAppPaths,
+  };
   document.querySelector("#publicRoot")?.classList.add("hidden");
   document.querySelector(".app-shell")?.classList.remove("hidden");
   document.body.dataset.appMode = "workspace";

@@ -1,10 +1,12 @@
 export const FORGEBOOK_ROOT = "/ForgeBook";
 export const FORGEBOOK_META_DIR = `${FORGEBOOK_ROOT}/.forgebook`;
 export const FORGEBOOK_BACKUPS_DIR = `${FORGEBOOK_META_DIR}/backups`;
+export const FORGEBOOK_CONFLICTS_DIR = `${FORGEBOOK_META_DIR}/conflicts`;
 export const FORGEBOOK_VAULTS_DIR = `${FORGEBOOK_ROOT}/vaults`;
 export const FORGEBOOK_APP_STATE_PATH = `${FORGEBOOK_META_DIR}/app-state.json`;
 export const FORGEBOOK_VAULT_INDEX_PATH = `${FORGEBOOK_META_DIR}/vault-index.json`;
 export const FORGEBOOK_RECOVERY_LOG_PATH = `${FORGEBOOK_META_DIR}/recovery-log.json`;
+export const FORGEBOOK_IMPORT_BACKUP_PATH = `${FORGEBOOK_META_DIR}/import-backup.json`;
 
 function normalizePath(path = "/") {
   const value = String(path || "/").replace(/\\/g, "/");
@@ -87,6 +89,10 @@ export function conflictCopyPath(path) {
   const extensionIndex = normalized.lastIndexOf(".");
   if (extensionIndex <= normalized.lastIndexOf("/")) return `${normalized} (conflict)`;
   return `${normalized.slice(0, extensionIndex)} (conflict)${normalized.slice(extensionIndex)}`;
+}
+
+export function workspaceConflictPath(label = "local") {
+  return joinPath(FORGEBOOK_CONFLICTS_DIR, `${sanitizeSegment(label)}.json`);
 }
 
 export function isVaultPath(path) {

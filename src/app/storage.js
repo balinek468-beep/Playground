@@ -10,6 +10,11 @@ import {
 import { filterLegacyMockMarketProfiles } from "../utils/marketProfiles.js";
 import { createStorageProvider, getStorageProvider } from "../services/storage/providers/createStorageProvider.js";
 import { createVaultManager } from "../services/vault/VaultManager.js";
+import {
+  FORGEBOOK_IMPORT_BACKUP_PATH,
+  FORGEBOOK_META_DIR,
+  workspaceConflictPath,
+} from "../services/vault/VaultPaths.js";
 import { createVaultWatchService } from "../services/vault/VaultWatchService.js";
 
 const PRIMARY_WORKSPACE_KEY = WORKSPACE_STORAGE_KEYS[0];
@@ -28,6 +33,7 @@ const BOOT_CACHE_KEY = "__FORGEBOOK_VAULT_BOOT__";
 
 let cachedVaultRuntime = null;
 let vaultWatchRuntime = null;
+const DESKTOP_DIRTY_BUFFER_PATH = `${FORGEBOOK_META_DIR}/dirty-buffer.json`;
 
 function nowIso() {
   return new Date().toISOString();
@@ -122,6 +128,15 @@ function snapshotMetadataFromState(parsed) {
     pendingCloudSync: Boolean(persistence.status?.pending_cloud_sync),
     conflict: Boolean(persistence.status?.conflict),
   };
+}
+
+function isSnapshotMetadataNewer(candidateMetadata = {}, baselineMetadata = {}) {
+  const candidateRevision = Number(candidateMetadata.localRevision || 0);
+  const baselineRevision = Number(baselineMetadata.localRevision || 0);
+  if (candidateRevision !== baselineRevision) return candidateRevision > baselineRevision;
+  const candidateUpdatedAt = Date.parse(candidateMetadata.updatedAt || "") || 0;
+  const baselineUpdatedAt = Date.parse(baselineMetadata.updatedAt || "") || 0;
+  return candidateUpdatedAt > baselineUpdatedAt;
 }
 
 export function extractWorkspaceSnapshotMetadata(raw) {
@@ -345,6 +360,43 @@ function getVaultRuntime() {
   return cachedVaultRuntime;
 }
 
+function desktopVaultRuntimeActive() {
+  return getVaultRuntime().provider?.kind === "desktop";
+}
+
+async function writeDesktopRecoveryFile(path, contents) {
+  const runtime = getVaultRuntime();
+  if (runtime.provider?.kind !== "desktop") return { ok: false, skipped: true };
+  try {
+    await runtime.provider.save(path, contents, { atomic: true });
+    return { ok: true };
+  } catch (error) {
+    console.error(`ForgeBook desktop recovery write failed for ${path}`, error);
+    return { ok: false, error };
+  }
+}
+
+async function readDesktopRecoveryFile(path) {
+  const runtime = getVaultRuntime();
+  if (runtime.provider?.kind !== "desktop") return null;
+  try {
+    return await runtime.provider.load(path);
+  } catch (error) {
+    console.warn(`ForgeBook desktop recovery read failed for ${path}`, error);
+    return null;
+  }
+}
+
+async function deleteDesktopRecoveryFile(path) {
+  const runtime = getVaultRuntime();
+  if (runtime.provider?.kind !== "desktop") return;
+  try {
+    await runtime.provider.delete(path);
+  } catch (error) {
+    console.warn(`ForgeBook desktop recovery delete failed for ${path}`, error);
+  }
+}
+
 function getBootCache() {
   return typeof window !== "undefined" ? window[BOOT_CACHE_KEY] || null : null;
 }
@@ -375,6 +427,9 @@ export async function prepareLocalFirstWorkspaceBoot() {
   const vaultHasContent = Array.isArray(normalizedVaultState.items) && normalizedVaultState.items.length > 0;
   const legacy = buildLegacySnapshotCandidates();
   const legacyBest = legacy.candidates[0]?.candidate || null;
+  const desktopDirtyRaw = desktopVaultRuntimeActive() ? await readDesktopRecoveryFile(DESKTOP_DIRTY_BUFFER_PATH) : null;
+  const desktopDirtyState = desktopDirtyRaw ? parseWorkspaceCandidate(desktopDirtyRaw, "desktop-dirty-buffer") : null;
+  let recoveredDesktopBufferApplied = false;
 
   let finalState = normalizedVaultState;
   let sourceKey = "vault";
@@ -387,6 +442,25 @@ export async function prepareLocalFirstWorkspaceBoot() {
     if (migrated) {
       recoveryWarnings = mergeRecoveryWarnings(recoveryWarnings, ["Migrated your legacy workspace snapshot into local-first vault storage."]);
     }
+  }
+
+  if (
+    desktopDirtyState &&
+    isSnapshotMetadataNewer(snapshotMetadataFromState(desktopDirtyState), snapshotMetadataFromState(finalState))
+  ) {
+    finalState = desktopDirtyState;
+    sourceKey = "desktop-dirty-buffer";
+    recoveryWarnings = mergeRecoveryWarnings(recoveryWarnings, [
+      "Recovered newer unsaved desktop changes after an interrupted session.",
+    ]);
+    recoveredDesktopBufferApplied = await runtime.manager.saveWorkspaceState(desktopDirtyState).then(() => true).catch((error) => {
+      console.error("ForgeBook could not apply recovered desktop dirty buffer", error);
+      return false;
+    });
+  }
+
+  if (desktopDirtyRaw && recoveredDesktopBufferApplied) {
+    await deleteDesktopRecoveryFile(DESKTOP_DIRTY_BUFFER_PATH);
   }
 
   const bootPayload = {
@@ -459,6 +533,7 @@ function snapshotStringIsUsable(snapshot) {
 }
 
 function rotateBackups(snapshot) {
+  if (desktopVaultRuntimeActive()) return;
   const current = safeLocalStorageGet(PRIMARY_WORKSPACE_KEY);
   const previous = safeLocalStorageGet(PREVIOUS_WORKSPACE_KEY);
   if (previous) safeLocalStorageSet(PREVIOUS_2_WORKSPACE_KEY, previous);
@@ -468,10 +543,30 @@ function rotateBackups(snapshot) {
 
 export function writeDirtyWorkspaceBuffer(snapshot) {
   if (!snapshot) return { ok: false, error: new Error("Missing workspace snapshot") };
+  if (desktopVaultRuntimeActive()) {
+    writeDesktopRecoveryFile(DESKTOP_DIRTY_BUFFER_PATH, snapshot).then((result) => {
+      if (!result.ok) {
+        updateRecoveryState((current) => ({
+          ...current,
+          warnings: ["Desktop crash-recovery buffer failed to write.", ...current.warnings].slice(0, 6),
+          lastFailure: {
+            sourceKey: "desktop-dirty-buffer",
+            errorMessage: result.error?.message || "Desktop crash-recovery buffer write failed",
+            capturedAt: nowIso(),
+          },
+        }));
+      }
+    });
+    return { ok: true, pending: true };
+  }
   return safeLocalStorageSet(DIRTY_BUFFER_KEY, snapshot);
 }
 
 export function clearDirtyWorkspaceBuffer() {
+  if (desktopVaultRuntimeActive()) {
+    deleteDesktopRecoveryFile(DESKTOP_DIRTY_BUFFER_PATH);
+    return;
+  }
   safeLocalStorageRemove(DIRTY_BUFFER_KEY);
 }
 
@@ -539,24 +634,26 @@ export function writeWorkspaceSnapshot(snapshot, options = {}) {
     return result;
   }
 
-  const backupResults = [];
-  rotateBackups(snapshot);
-  backupResults.push(safeLocalStorageSet(PRIMARY_WORKSPACE_KEY, snapshot));
-  backupResults.push(safeLocalStorageSet(LEGACY_BACKUP_KEY, snapshot));
-  const backupFailure = backupResults.find((entry) => !entry.ok);
-  if (backupFailure) {
-    updateRecoveryState((current) => ({
-      ...current,
-      warnings: [
-        "Legacy backup write failed. Vault save succeeded, but export a JSON backup soon.",
-        ...current.warnings,
-      ].slice(0, 6),
-      lastFailure: {
-        sourceKey: backupFailure.error?.name || "localStorage",
-        errorMessage: backupFailure.error?.message || "Legacy snapshot backup write failed",
-        capturedAt: nowIso(),
-      },
-    }));
+  if (!desktopVaultRuntimeActive()) {
+    const backupResults = [];
+    rotateBackups(snapshot);
+    backupResults.push(safeLocalStorageSet(PRIMARY_WORKSPACE_KEY, snapshot));
+    backupResults.push(safeLocalStorageSet(LEGACY_BACKUP_KEY, snapshot));
+    const backupFailure = backupResults.find((entry) => !entry.ok);
+    if (backupFailure) {
+      updateRecoveryState((current) => ({
+        ...current,
+        warnings: [
+          "Legacy backup write failed. Vault save succeeded, but export a JSON backup soon.",
+          ...current.warnings,
+        ].slice(0, 6),
+        lastFailure: {
+          sourceKey: backupFailure.error?.name || "localStorage",
+          errorMessage: backupFailure.error?.message || "Legacy snapshot backup write failed",
+          capturedAt: nowIso(),
+        },
+      }));
+    }
   }
 
   clearDirtyWorkspaceBuffer();
@@ -572,22 +669,37 @@ export function writeWorkspaceSnapshot(snapshot, options = {}) {
   return { ok: true, localFirst: true, provider: runtime.provider?.kind || "browser", pending: !runtime.provider?.isSynchronous };
 }
 
-export function savePreImportBackup(snapshot) {
+export async function savePreImportBackup(snapshot) {
   if (!snapshot) return;
-  safeLocalStorageSet(PRE_IMPORT_BACKUP_KEY, snapshot);
+  if (desktopVaultRuntimeActive()) {
+    const result = await writeDesktopRecoveryFile(FORGEBOOK_IMPORT_BACKUP_PATH, snapshot);
+    if (!result.ok) {
+      updateRecoveryState((current) => ({
+        ...current,
+        warnings: ["Desktop import backup failed to write.", ...current.warnings].slice(0, 6),
+      }));
+      return;
+    }
+  } else {
+    safeLocalStorageSet(PRE_IMPORT_BACKUP_KEY, snapshot);
+  }
   updateRecoveryState((current) => ({
     ...current,
     importBackupAvailable: true,
   }));
 }
 
-export function importWorkspaceSnapshot(raw) {
+export async function importWorkspaceSnapshot(raw) {
   const candidate = parseWorkspaceCandidate(raw, "import");
   if (!candidate) {
     return { ok: false, error: new Error("Imported workspace JSON is invalid.") };
   }
-  const current = safeLocalStorageGet(PRIMARY_WORKSPACE_KEY);
-  if (current) savePreImportBackup(current);
+  let current = safeLocalStorageGet(PRIMARY_WORKSPACE_KEY);
+  if (desktopVaultRuntimeActive()) {
+    const reloaded = await reloadWorkspaceStateFromVault().catch(() => null);
+    current = reloaded?.state ? JSON.stringify(reloaded.state) : current;
+  }
+  if (current) await savePreImportBackup(current);
   const result = writeWorkspaceSnapshot(raw, { reason: "import", immediateCloud: false });
   if (!result.ok) return result;
   return {
@@ -601,22 +713,29 @@ export function importWorkspaceSnapshot(raw) {
   };
 }
 
-export function restorePreImportBackup() {
-  const backup = safeLocalStorageGet(PRE_IMPORT_BACKUP_KEY);
+export async function restorePreImportBackup() {
+  const backup = desktopVaultRuntimeActive()
+    ? await readDesktopRecoveryFile(FORGEBOOK_IMPORT_BACKUP_PATH)
+    : safeLocalStorageGet(PRE_IMPORT_BACKUP_KEY);
   if (!backup) return { ok: false, error: new Error("No pre-import backup available") };
   return writeWorkspaceSnapshot(backup, { reason: "restore-pre-import", immediateCloud: false });
 }
 
 export function recordWorkspaceConflict(localSnapshot, cloudSnapshot, reason = "Local snapshot is newer than cloud snapshot") {
-  if (localSnapshot) safeLocalStorageSet(CLOUD_CONFLICT_LOCAL_KEY, localSnapshot);
-  if (cloudSnapshot) safeLocalStorageSet(CLOUD_CONFLICT_REMOTE_KEY, cloudSnapshot);
+  if (desktopVaultRuntimeActive()) {
+    if (localSnapshot) void writeDesktopRecoveryFile(workspaceConflictPath("local"), localSnapshot);
+    if (cloudSnapshot) void writeDesktopRecoveryFile(workspaceConflictPath("cloud"), cloudSnapshot);
+  } else {
+    if (localSnapshot) safeLocalStorageSet(CLOUD_CONFLICT_LOCAL_KEY, localSnapshot);
+    if (cloudSnapshot) safeLocalStorageSet(CLOUD_CONFLICT_REMOTE_KEY, cloudSnapshot);
+  }
   updateRecoveryState((current) => ({
     ...current,
     conflict: {
       reason,
       capturedAt: nowIso(),
-      localKey: CLOUD_CONFLICT_LOCAL_KEY,
-      remoteKey: CLOUD_CONFLICT_REMOTE_KEY,
+      localKey: desktopVaultRuntimeActive() ? workspaceConflictPath("local") : CLOUD_CONFLICT_LOCAL_KEY,
+      remoteKey: desktopVaultRuntimeActive() ? workspaceConflictPath("cloud") : CLOUD_CONFLICT_REMOTE_KEY,
     },
     warnings: [
       `Workspace sync conflict detected: ${reason}`,
@@ -626,8 +745,13 @@ export function recordWorkspaceConflict(localSnapshot, cloudSnapshot, reason = "
 }
 
 export function clearWorkspaceConflict() {
-  safeLocalStorageRemove(CLOUD_CONFLICT_LOCAL_KEY);
-  safeLocalStorageRemove(CLOUD_CONFLICT_REMOTE_KEY);
+  if (desktopVaultRuntimeActive()) {
+    void deleteDesktopRecoveryFile(workspaceConflictPath("local"));
+    void deleteDesktopRecoveryFile(workspaceConflictPath("cloud"));
+  } else {
+    safeLocalStorageRemove(CLOUD_CONFLICT_LOCAL_KEY);
+    safeLocalStorageRemove(CLOUD_CONFLICT_REMOTE_KEY);
+  }
   updateRecoveryState((current) => ({
     ...current,
     conflict: null,
@@ -642,7 +766,28 @@ export function getVaultProvider() {
   return getVaultRuntime().provider;
 }
 
+export async function reloadWorkspaceStateFromVault() {
+  const runtime = getVaultRuntime();
+  const recovery = readRecoveryState();
+  const vaultLoaded = await runtime.manager.loadWorkspaceState();
+  const normalizedVaultState = normalizeParsedSnapshot(vaultLoaded.state || createDefaultStateSnapshot());
+  const payload = {
+    state: normalizeSnapshotPersistence(normalizedVaultState),
+    diagnostics: [],
+    recoveryWarnings: mergeRecoveryWarnings(recovery.warnings, vaultLoaded.recoveryWarnings),
+    recoveryState: recovery,
+    sourceKey: "vault",
+    provider: runtime.provider?.kind || "browser",
+  };
+  setBootCache(payload);
+  return payload;
+}
+
 export function listVaults() {
+  const boot = getBootCache();
+  if (Array.isArray(boot?.state?.items)) {
+    return boot.state.items.filter((item) => item.type === "folder" && item.folderKind === "vault");
+  }
   const runtime = getVaultRuntime();
   if (runtime.provider?.isSynchronous) {
     return runtime.manager.loadWorkspaceStateSync().state.items.filter((item) => item.type === "folder" && item.folderKind === "vault");

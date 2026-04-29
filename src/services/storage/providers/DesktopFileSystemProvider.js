@@ -1,4 +1,15 @@
-import { getAppPaths, isDesktopEnvironment, listPaths, readTextFile, watchPath, writeTextFile, deletePath } from "../../desktop/DesktopBridge.js";
+import {
+  copyPath,
+  createDirectory,
+  getAppPaths,
+  isDesktopEnvironment,
+  listPaths,
+  readTextFile,
+  watchPath,
+  writeTextFile,
+  deletePath,
+  movePath,
+} from "../../desktop/DesktopBridge.js";
 
 function normalizePath(path = "/") {
   const value = String(path || "/").replace(/\\/g, "/");
@@ -12,6 +23,7 @@ export class DesktopFileSystemProvider {
     this.kind = "desktop";
     this.isSynchronous = false;
     this.rootDir = options.rootDir || "";
+    this.forgebookDir = options.forgebookDir || "";
   }
 
   normalize(path) {
@@ -26,6 +38,7 @@ export class DesktopFileSystemProvider {
     if (this.rootDir) return this.rootDir;
     const paths = await getAppPaths();
     this.rootDir = String(paths?.rootDir || "").replace(/\\/g, "/");
+    this.forgebookDir = String(paths?.forgebookDir || "").replace(/\\/g, "/");
     return this.rootDir;
   }
 
@@ -54,24 +67,39 @@ export class DesktopFileSystemProvider {
     return writeTextFile(resolvedPath, String(value ?? ""), { atomic: options.atomic !== false });
   }
 
-  async delete(path) {
+  async delete(path, options = {}) {
     const resolvedPath = await this.resolvePath(path);
-    return deletePath(resolvedPath, { recursive: false });
+    return deletePath(resolvedPath, { recursive: Boolean(options.recursive) });
   }
 
-  async list(prefix = "/") {
+  async list(prefix = "/", options = {}) {
     const resolvedPath = await this.resolvePath(prefix);
-    const entries = await listPaths(resolvedPath, { recursive: true }).catch(() => []);
+    const entries = await listPaths(resolvedPath, { recursive: options.recursive !== false }).catch(() => []);
     const results = [];
     for (const entry of Array.isArray(entries) ? entries : []) {
       const absolutePath = typeof entry === "string" ? entry : entry.path;
-      const type = typeof entry === "string" ? "file" : entry.type || "file";
+      const type = typeof entry === "string" ? "file" : entry.kind || entry.type || "file";
       results.push({
         path: await this.toRelativePath(absolutePath),
         type,
+        size: typeof entry === "string" ? 0 : Number(entry.size || 0),
+        modifiedAt: typeof entry === "string" ? "" : entry.modifiedAt || "",
       });
     }
     return results;
+  }
+
+  async mkdir(path, options = {}) {
+    const resolvedPath = await this.resolvePath(path);
+    return createDirectory(resolvedPath, options);
+  }
+
+  async move(from, to, options = {}) {
+    return movePath(await this.resolvePath(from), await this.resolvePath(to), options);
+  }
+
+  async copy(from, to, options = {}) {
+    return copyPath(await this.resolvePath(from), await this.resolvePath(to), options);
   }
 
   watch(prefix, callback) {

@@ -9,15 +9,17 @@ export function createVaultWatchService({ provider, vaultManager } = {}) {
       if (!provider?.watch || !vaultId) return () => {};
       if (stopWatching) stopWatching();
       stopWatching = provider.watch(vaultRootPath(vaultId), async (event) => {
-        if (typeof handlers.onExternalChange === "function") {
-          handlers.onExternalChange(event);
-        }
-        if (typeof handlers.onConflict === "function" && handlers.isDirty?.()) {
+        const isDirty = Boolean(handlers.isDirty?.());
+        if (typeof handlers.onConflict === "function" && isDirty) {
           const externalContents = await provider.load(event.path).catch(() => null);
           if (externalContents != null) {
             await vaultManager?.createConflictCopy?.(event.path, externalContents).catch(() => null);
             handlers.onConflict({ ...event, conflictCopyCreated: true });
           }
+          return;
+        }
+        if (typeof handlers.onExternalChange === "function") {
+          handlers.onExternalChange(event);
         }
       });
       return stopWatching;

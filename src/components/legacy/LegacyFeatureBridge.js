@@ -11,7 +11,7 @@ import {
   randomUserId,
   uid,
 } from "../../app/state.js";
-import { importWorkspaceSnapshot, loadWorkspaceState, parseWorkspaceCandidate, startVaultWatch, writeDirtyWorkspaceBuffer, writeWorkspaceSnapshot } from "../../app/storage.js";
+import { importWorkspaceSnapshot, loadWorkspaceState, parseWorkspaceCandidate, reloadWorkspaceStateFromVault, startVaultWatch, writeDirtyWorkspaceBuffer, writeWorkspaceSnapshot } from "../../app/storage.js";
 import {
   BOARD_PRESET_LIBRARY,
   BOARD_SIZE_PRESETS,
@@ -251,6 +251,7 @@ let toastTimerSeed = 0;
 let saveTimer = null;
 let pendingSaveSnapshot = "";
 let lastWrittenSnapshot = "";
+let ignoreVaultEventsUntil = 0;
 const SAVE_DEBOUNCE_MS = 1200;
 let libraryRenderRaf = 0;
 let workspaceRenderRaf = 0;
@@ -330,6 +331,11 @@ if (activeRuntimeUser()?.id) {
 
 function bindEvents() {
   window.addEventListener("beforeunload", flushSave);
+  window.addEventListener("pagehide", () => flushSave({ reason: "pagehide" }));
+  window.addEventListener("blur", () => flushSave({ reason: "window-blur" }));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushSave({ reason: "visibility-hidden" });
+  });
   const workspaceScroller = document.querySelector(".workspace-main");
   workspaceScroller?.addEventListener("scroll", () => {
     workspaceScroller.classList.toggle("is-scrolled", workspaceScroller.scrollTop > 8);
@@ -630,7 +636,7 @@ function bindEvents() {
       if (!file) return;
       try {
         const text = await file.text();
-        const imported = importWorkspaceSnapshot(text);
+        const imported = await importWorkspaceSnapshot(text);
         if (!imported.ok) {
           showToast(imported.error?.message || "Workspace import failed", "warning");
           return;
@@ -794,12 +800,68 @@ function openCreditsModal() {
   });
 }
 
+function hasPendingUnsavedChanges() {
+  return Boolean(pendingSaveSnapshot && pendingSaveSnapshot !== lastWrittenSnapshot);
+}
+
+async function refreshWorkspaceFromVault(event = null) {
+  try {
+    const reloaded = await reloadWorkspaceStateFromVault();
+    const previousVaultId = state.selectedVaultId;
+    const previousDocumentId = state.activeDocumentId;
+    state = reloaded.state;
+    diagnostics = Array.isArray(reloaded.diagnostics) ? reloaded.diagnostics : diagnostics;
+    normalize();
+    if (previousVaultId && item(previousVaultId)) state.selectedVaultId = previousVaultId;
+    if (previousDocumentId && item(previousDocumentId)) state.activeDocumentId = previousDocumentId;
+    render();
+    if (event?.path) {
+      showToast(`Vault updated from disk | ${event.path.split(/[\\/]/).pop() || "changed file"}`, "warning");
+    }
+  } catch (error) {
+    console.error("ForgeBook vault reload from disk failed", error);
+    showToast("Could not reload vault changes from disk", "warning");
+  }
+}
+
+function handleVaultExternalChange(event) {
+  if (Date.now() < ignoreVaultEventsUntil) return;
+  const changedPath = String(event?.path || "");
+  if (!changedPath || changedPath.includes("/.forgebook/backups/") || changedPath.includes("\\.forgebook\\backups\\")) return;
+  void refreshWorkspaceFromVault(event);
+}
+
+function handleVaultConflict(event) {
+  const changedPath = String(event?.path || "");
+  const label = changedPath.split(/[\\/]/).pop() || "file";
+  showToast(`External change kept as conflict copy | ${label}`, "warning");
+}
+
+function syncActiveVaultWatch() {
+  const vault = selectedVault();
+  if (!vault?.id) {
+    if (stopActiveVaultWatch) stopActiveVaultWatch();
+    stopActiveVaultWatch = null;
+    watchedVaultId = null;
+    return;
+  }
+  if (watchedVaultId === vault.id && stopActiveVaultWatch) return;
+  if (stopActiveVaultWatch) stopActiveVaultWatch();
+  watchedVaultId = vault.id;
+  stopActiveVaultWatch = startVaultWatch(vault.id, {
+    isDirty: () => hasPendingUnsavedChanges(),
+    onExternalChange: handleVaultExternalChange,
+    onConflict: handleVaultConflict,
+  });
+}
+
 function render() {
   normalize();
   renderChrome();
   renderLibrary();
   renderMarket();
   renderWorkspace();
+  syncActiveVaultWatch();
   applyPremiumMotion();
 }
 
@@ -7098,6 +7160,7 @@ function serializeStateForPersistence() {
 function persistLocalSnapshot(snapshot, options = {}) {
   const result = writeWorkspaceSnapshot(snapshot, options);
   if (result.ok) {
+    ignoreVaultEventsUntil = Date.now() + 1500;
     lastWrittenSnapshot = snapshot;
     lastSavedAt = new Date();
     applyPersistenceStatusPatch({

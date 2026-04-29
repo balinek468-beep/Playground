@@ -5,12 +5,15 @@
   "identifier": "com.forgebook.app",
   "build": {
     "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "ForgeBook",
         "width": 1440,
         "height": 920,
@@ -26,7 +29,15 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
+    "publisher": "ForgeBook",
+    "shortDescription": "Local-first workspace for game design and production.",
     "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
@@ -35,11 +46,9 @@
   },
   "plugins": {
     "updater": {
-      "active": true,
       "endpoints": [
         "https://your-download-domain.example.com/version.json"
       ],
-      "dialog": false,
       "pubkey": ""
     }
   }

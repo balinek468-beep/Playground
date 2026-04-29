@@ -541,6 +541,15 @@ export class VaultManager {
     return (state.state.items || []).filter((item) => item.type === "folder" && item.folderKind === "vault");
   }
 
+  async listVaultFiles(vaultId, options = {}) {
+    if (!vaultId) return [];
+    const entries = await this._list(vaultRootPath(vaultId));
+    return (entries || []).filter((entry) => {
+      if (options.includeMeta) return true;
+      return !String(entry.path || "").includes("/.forgebook/");
+    });
+  }
+
   async loadVault(vaultId) {
     const state = await this.loadWorkspaceState();
     return {
