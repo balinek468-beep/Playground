@@ -2,6 +2,26 @@ import { ENV } from "../../constants/env.js";
 import { filterLegacyMockMarketProfiles } from "../../utils/marketProfiles.js";
 import { getSupabaseClient } from "../auth/supabaseClient.js";
 
+function createLegacyMarketplaceSchemaError(error) {
+  const next = new Error("Marketplace posting is blocked until the multi-post marketplace migration is applied.");
+  next.code = "marketplace_schema_legacy_single_post";
+  next.hint = "Run backend/supabase/marketplace_multi_post_migration.sql in Supabase before creating additional marketplace posts.";
+  next.details = error?.details || "Legacy marketplace schema still forces post id to behave like user id.";
+  next.cause = error;
+  return next;
+}
+
+function isLegacySinglePostSchemaError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const details = String(error?.details || "").toLowerCase();
+  return (
+    message.includes("foreign key") ||
+    details.includes("foreign key") ||
+    message.includes("marketplace_profiles_id_fkey") ||
+    details.includes("marketplace_profiles_id_fkey")
+  );
+}
+
 export async function fetchMarketplaceProfiles() {
   const client = getSupabaseClient();
   if (!client) return [];
@@ -35,47 +55,31 @@ export async function fetchMarketplaceProfiles() {
 export async function upsertMarketplaceProfile(profile) {
   const client = getSupabaseClient();
   if (!client) return null;
-  const sanitizePayload = (payload) => ({
-    id: payload.id,
-    user_id: payload.user_id,
-    nickname: payload.nickname,
-    display_name: payload.display_name,
-    role: payload.role,
-    bio: payload.bio ?? "",
-    availability_status: payload.availability_status ?? "Open to offers",
-    experience_level: payload.experience_level ?? "Mid",
-    hourly_rate: payload.hourly_rate ?? null,
-    tags: Array.isArray(payload.tags) ? payload.tags : [],
-    tools: Array.isArray(payload.tools) ? payload.tools : [],
-    portfolio: Array.isArray(payload.portfolio) ? payload.portfolio : [],
-    updated_at: payload.updated_at || new Date().toISOString(),
-  });
-  const attemptUpsert = async (payload) => {
-    const { data, error } = await client
-      .from(ENV.marketTable)
-      .upsert(payload, { onConflict: "id" })
-      .select("*")
-      .single();
-    if (error) throw error;
-    return data;
+  const payload = {
+    id: profile?.id || undefined,
+    user_id: profile?.user_id,
+    nickname: profile?.nickname,
+    display_name: profile?.display_name,
+    role: profile?.role,
+    bio: profile?.bio ?? "",
+    availability_status: profile?.availability_status ?? "Open to offers",
+    experience_level: profile?.experience_level ?? "Mid",
+    hourly_rate: profile?.hourly_rate ?? null,
+    tags: Array.isArray(profile?.tags) ? profile.tags : [],
+    tools: Array.isArray(profile?.tools) ? profile.tools : [],
+    portfolio: Array.isArray(profile?.portfolio) ? profile.portfolio : [],
+    updated_at: profile?.updated_at || new Date().toISOString(),
   };
-  const basePayload = sanitizePayload(profile);
-  try {
-    return await attemptUpsert(basePayload);
-  } catch (error) {
-    const message = String(error?.message || "").toLowerCase();
-    const details = String(error?.details || "").toLowerCase();
-    const looksLikeLegacySinglePostSchema =
-      message.includes("foreign key") ||
-      details.includes("foreign key") ||
-      message.includes("marketplace_profiles_id_fkey");
-    if (!looksLikeLegacySinglePostSchema || !basePayload?.user_id) throw error;
-    const legacyPayload = {
-      ...basePayload,
-      id: basePayload.user_id,
-    };
-    return await attemptUpsert(legacyPayload);
+  const { data, error } = await client
+    .from(ENV.marketTable)
+    .upsert(payload, { onConflict: "id" })
+    .select("*")
+    .single();
+  if (error) {
+    if (isLegacySinglePostSchemaError(error)) throw createLegacyMarketplaceSchemaError(error);
+    throw error;
   }
+  return data;
 }
 
 export async function deleteMarketplaceProfile(profileId, userId) {

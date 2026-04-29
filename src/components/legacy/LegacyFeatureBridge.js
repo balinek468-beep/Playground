@@ -11,7 +11,7 @@ import {
   randomUserId,
   uid,
 } from "../../app/state.js";
-import { loadWorkspaceState, parseWorkspaceCandidate, writeWorkspaceSnapshot } from "../../app/storage.js";
+import { importWorkspaceSnapshot, loadWorkspaceState, parseWorkspaceCandidate, startVaultWatch, writeDirtyWorkspaceBuffer, writeWorkspaceSnapshot } from "../../app/storage.js";
 import {
   BOARD_PRESET_LIBRARY,
   BOARD_SIZE_PRESETS,
@@ -42,11 +42,14 @@ import {
 } from "../../services/database/ConversationRepository.js";
 import { collectLegacyElements } from "./LegacyViewMount.js";
 import { createCanvasRuntime } from "../../features/canvas/canvasRuntime.js";
+import { createStorageCategoryRecord, createStorageFolderRecord, deleteStorageItemRecord, fetchStorageLibrary, recoverStorageOrphans, retryStorageMetadataSync, updateStorageItemAttributes, uploadStorageFile } from "../../services/storage/StorageRepository.js";
 
 const $ = (s) => document.querySelector(s);
 const TEMPLATE_MARKUP = Object.fromEntries(DOCUMENT_TEMPLATE_LIBRARY.map((entry) => [entry.id, entry]));
 let fileVaultUploadInput = null;
 let fileVaultUploadContext = null;
+const pendingStorageUploads = new Map();
+let storageCloudRefreshPromise = null;
 
 function ensureMarketUI() {
   ensureMarketPage();
@@ -208,6 +211,7 @@ let diagnostics = [];
 let loadedWorkspace = loadWorkspaceState();
 let state = loadedWorkspace.state;
 diagnostics = loadedWorkspace.diagnostics;
+const startupRecoveryWarnings = Array.isArray(loadedWorkspace.recoveryWarnings) ? loadedWorkspace.recoveryWarnings : [];
 const runtimeUser = window.ForgeBookRuntime?.auth?.user;
 const runtimeProfile = window.ForgeBookRuntime?.data?.profile;
 if (runtimeUser) {
@@ -263,6 +267,8 @@ let marketReturnView = "library";
 let marketRefreshPromise = null;
 let friendRefreshPromise = null;
 let conversationRefreshPromise = null;
+let stopActiveVaultWatch = null;
+let watchedVaultId = null;
 
 const on = (selector, event, handler) => {
   const node = $(selector);
@@ -288,6 +294,26 @@ const canvasRuntime = createCanvasRuntime({
 
 bindEvents();
 normalize();
+window.addEventListener("forgebook:persistence-status", (event) => {
+  if (!event?.detail) return;
+  ensurePersistenceState();
+  Object.assign(state.persistence.status, event.detail);
+  if (event.detail.localRevision != null) state.persistence.localRevision = Number(event.detail.localRevision || state.persistence.localRevision || 0);
+  if (event.detail.cloudRevision != null) state.persistence.cloudRevision = Number(event.detail.cloudRevision || state.persistence.cloudRevision || 0);
+  if (event.detail.lastLocalSaveAt) state.persistence.lastLocalSaveAt = event.detail.lastLocalSaveAt;
+  if (event.detail.lastCloudSyncAt) state.persistence.lastCloudSyncAt = event.detail.lastCloudSyncAt;
+  if (event.detail.cloudSnapshotUpdatedAt) state.persistence.cloudSnapshotUpdatedAt = event.detail.cloudSnapshotUpdatedAt;
+  if (event.detail.deviceId) state.persistence.deviceId = event.detail.deviceId;
+  if (state.activeView === "workspace") {
+    updateDocumentState(savedStateLabel());
+    renderWorkspaceStatus(activeDoc(), selectedVault());
+  }
+});
+if (startupRecoveryWarnings.length) {
+  window.setTimeout(() => {
+    showToast(startupRecoveryWarnings[0], "warning");
+  }, 120);
+}
 applyLocationState();
 render();
 if (activeRuntimeUser()?.id) {
@@ -604,13 +630,17 @@ function bindEvents() {
       if (!file) return;
       try {
         const text = await file.text();
-        const candidate = parseWorkspaceCandidate(text);
-        if (!candidate) return;
-        state = candidate;
+        const imported = importWorkspaceSnapshot(text);
+        if (!imported.ok) {
+          showToast(imported.error?.message || "Workspace import failed", "warning");
+          return;
+        }
+        state = imported.state;
+        diagnostics = loadWorkspaceState().diagnostics;
         normalize();
-        save();
+        flushSave({ reason: "import" });
         render();
-        showToast("Workspace imported");
+        showToast(`Workspace imported | ${imported.summary.vaults} vaults | ${imported.summary.documents} docs`);
       } finally {
         event.target.value = "";
       }
@@ -667,9 +697,9 @@ function bindEvents() {
     }
     if (meta && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      save();
+      flushSave({ reason: "manual-save" });
       updateDocumentState(savedStateLabel());
-      showToast("Workspace saved");
+      showToast(savedStateLabel());
     }
     if (meta && event.key.toLowerCase() === "k") {
       event.preventDefault();
@@ -712,6 +742,22 @@ function bindEvents() {
     if (!event.target.closest("#contextMenu")) {
       closeContextMenu();
     }
+  });
+  document.addEventListener("focusout", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+      flushSave({ reason: "blur" });
+    }
+  }, true);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushSave({ reason: "visibilitychange" });
+  });
+  window.addEventListener("pagehide", () => {
+    flushSave({ reason: "pagehide" });
+  });
+  window.addEventListener("blur", () => {
+    flushSave({ reason: "window-blur" });
   });
   if (els.vaultContentsTree) {
     els.vaultContentsTree.addEventListener("dragover", handleVaultRootDragOver);
@@ -2038,16 +2084,18 @@ function normalizeStorageDoc(doc) {
 }
 
 function normalizeStorageFile(file) {
-  return {
+  const normalized = {
     id: file.id || uid(),
     name: file.name || "Untitled file",
     type: file.type || file.name?.split(".").at(-1)?.toUpperCase() || "Asset",
+    fileType: file.fileType || inferStorageFileType({ name: file.name || "", type: file.mimeType || "" }),
     mimeType: file.mimeType || "",
     size: Number(file.size || 0),
     updatedAt: Number(file.updatedAt || Date.now()),
     createdAt: Number(file.createdAt || file.updatedAt || Date.now()),
     preview: typeof file.preview === "string" ? file.preview : "",
     downloadUrl: typeof file.downloadUrl === "string" ? file.downloadUrl : (typeof file.preview === "string" ? file.preview : ""),
+    localObjectUrl: typeof file.localObjectUrl === "string" ? file.localObjectUrl : "",
     folderId: file.folderId || null,
     categoryId: file.categoryId || null,
     tags: Array.isArray(file.tags) ? file.tags : [],
@@ -2057,14 +2105,227 @@ function normalizeStorageFile(file) {
     shared: Boolean(file.shared),
     archived: Boolean(file.archived),
     deletedAt: file.deletedAt || null,
-    uploadStatus: file.uploadStatus || "ready",
+    uploadStatus: file.uploadStatus || "synced",
+    progress: Number(file.progress ?? (file.uploadStatus === "synced" ? 1 : 0)),
+    syncError: typeof file.syncError === "string" ? file.syncError : "",
     projectId: file.projectId || null,
     workspaceId: file.workspaceId || vaultId(activeDoc()?.id || state.activeDocumentId) || state.selectedVaultId || null,
-    ownerId: file.ownerId || state.profile.userId,
+    ownerId: file.ownerId || currentAccountId(),
     linkedIds: Array.isArray(file.linkedIds) ? file.linkedIds : [],
     version: Number(file.version || 1),
+    versions: Array.isArray(file.versions) ? file.versions : [],
+    links: Array.isArray(file.links) ? file.links : [],
+    activity: Array.isArray(file.activity) ? file.activity : [],
     extension: file.extension || file.name?.split(".").at(-1)?.toLowerCase() || "",
+    storageItemId: file.storageItemId || file.remoteId || null,
+    storageVersionId: file.storageVersionId || null,
+    assetId: file.assetId || null,
+    storagePath: file.storagePath || "",
+    remote: Boolean(file.remote || file.storageItemId),
+    pendingSyncPayload: file.pendingSyncPayload || null,
   };
+  if (!normalized.preview && normalized.localObjectUrl && normalized.mimeType.startsWith("image/")) normalized.preview = normalized.localObjectUrl;
+  if (!normalized.downloadUrl && normalized.localObjectUrl) normalized.downloadUrl = normalized.localObjectUrl;
+  return normalized;
+}
+
+function storageSyncEnabled() {
+  return Boolean(activeRuntimeUser()?.id && window.ForgeBookRuntime?.mode === "supabase");
+}
+
+function storageNeedsAttention(file) {
+  return ["local-pending", "uploading", "failed", "metadata-pending", "local-only", "cleanup-failed", "deleting"].includes(String(file?.uploadStatus || ""));
+}
+
+function storageSyncLabel(file) {
+  const stateLabel = String(file?.uploadStatus || "synced");
+  if (stateLabel === "local-pending") return "Pending";
+  if (stateLabel === "uploading") return `Uploading ${Math.round(Number(file?.progress || 0) * 100)}%`;
+  if (stateLabel === "metadata-pending") return "Retry metadata sync";
+  if (stateLabel === "failed") return "Upload failed";
+  if (stateLabel === "cleanup-failed") return "Delete failed";
+  if (stateLabel === "deleting") return "Deleting";
+  if (stateLabel === "local-only") return "Local only";
+  return "Synced";
+}
+
+function storageSyncTone(file) {
+  const stateLabel = String(file?.uploadStatus || "synced");
+  if (["failed", "cleanup-failed"].includes(stateLabel)) return "warning";
+  if (["uploading", "local-pending", "metadata-pending", "deleting"].includes(stateLabel)) return "info";
+  if (stateLabel === "local-only") return "muted";
+  return "success";
+}
+
+function inferStorageFileType(file) {
+  const mime = String(file?.type || file?.mimeType || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  if (/pdf/.test(mime) || /\.pdf$/.test(name)) return "pdf";
+  if (/sheet|excel|csv/.test(mime) || /\.(csv|xls|xlsx)$/.test(name)) return "sheet";
+  if (/json|xml|yaml|toml|javascript|typescript|python|html|css|text/.test(mime) || /\.(json|xml|ya?ml|toml|js|jsx|ts|tsx|py|html|css|txt|md)$/.test(name)) return "source";
+  if (/zip|archive|compressed/.test(mime) || /\.(zip|rar|7z|tar|gz)$/.test(name)) return "archive";
+  return "file";
+}
+
+function createStorageObjectUrl(file) {
+  try {
+    return URL.createObjectURL(file);
+  } catch {
+    return "";
+  }
+}
+
+
+function fileExtensionTag(name = "", mimeType = "") {
+  const ext = String(name || "").split(".").at(-1)?.toUpperCase();
+  if (ext && ext !== String(name || "").toUpperCase()) return ext;
+  if (mimeType.startsWith("image/")) return "IMG";
+  if (mimeType.startsWith("video/")) return "VID";
+  if (mimeType.startsWith("audio/")) return "AUD";
+  return "FILE";
+}
+
+function createPendingStorageEntry(file, folderId, contextDoc) {
+  const objectUrl = createStorageObjectUrl(file);
+  return normalizeStorageFile({
+    id: uid(),
+    name: file.name,
+    type: fileExtensionTag(file.name, file.type || ""),
+    fileType: inferStorageFileType(file),
+    mimeType: file.type || "application/octet-stream",
+    size: Number(file.size || 0),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    preview: file.type?.startsWith("image/") ? objectUrl : "",
+    downloadUrl: objectUrl,
+    localObjectUrl: objectUrl,
+    folderId: folderId || null,
+    categoryId: null,
+    tags: [],
+    labels: [],
+    favorite: false,
+    pinned: false,
+    shared: false,
+    archived: false,
+    deletedAt: null,
+    ownerId: currentAccountId(),
+    workspaceId: state.selectedVaultId || vaultId(contextDoc?.id) || null,
+    linkedIds: [contextDoc?.id].filter(Boolean),
+    version: 1,
+    extension: file.name.split(".").at(-1)?.toLowerCase() || "",
+    uploadStatus: storageSyncEnabled() ? "local-pending" : "local-only",
+    progress: storageSyncEnabled() ? 0.04 : 1,
+    syncError: "",
+    storageItemId: null,
+    storageVersionId: null,
+    assetId: null,
+    storagePath: "",
+    remote: false,
+    pendingSyncPayload: null,
+    versions: [],
+    links: [],
+    activity: [],
+  });
+}
+
+
+function rerenderStorageSurfaces() {
+  save();
+  renderChrome();
+  if (!els.overlayPanel?.classList.contains("hidden") && els.overlayCard?.classList.contains("overlay-card-chat")) renderFileVaultOverlay();
+  renderStorageWorkspace();
+}
+
+async function syncPendingStorageEntry(entryId) {
+  normalizeStorageState();
+  const entry = fileVaultEntries().find((file) => file.id === entryId);
+  if (!entry) return null;
+  const userId = activeRuntimeUser()?.id;
+  if (!storageSyncEnabled() || !userId) {
+    entry.uploadStatus = "local-only";
+    entry.progress = 1;
+    entry.syncError = "";
+    rerenderStorageSurfaces();
+    return entry;
+  }
+
+  const pendingFile = pendingStorageUploads.get(entryId) || null;
+  entry.uploadStatus = entry.pendingSyncPayload ? "metadata-pending" : "uploading";
+  entry.progress = entry.pendingSyncPayload ? Math.max(0.72, Number(entry.progress || 0.72)) : Math.max(0.08, Number(entry.progress || 0.08));
+  entry.syncError = "";
+  rerenderStorageSurfaces();
+
+  const handleProgress = ({ stage, progress, path, publicUrl, itemId, versionId }) => {
+    entry.progress = Math.max(entry.progress || 0, Number(progress || 0));
+    if (path) entry.storagePath = path;
+    if (publicUrl) {
+      entry.downloadUrl = publicUrl;
+      if (!entry.preview && entry.mimeType?.startsWith("image/")) entry.preview = publicUrl;
+    }
+    if (itemId) entry.storageItemId = itemId;
+    if (versionId) entry.storageVersionId = versionId;
+    entry.uploadStatus = stage === "synced" ? "synced" : stage === "syncing-metadata" ? "metadata-pending" : "uploading";
+    rerenderStorageSurfaces();
+  };
+
+  try {
+    let result;
+    if (entry.pendingSyncPayload) {
+      result = await retryStorageMetadataSync({ userId, recovery: entry.pendingSyncPayload });
+    } else {
+      if (!pendingFile) {
+        throw new Error("The local file reference expired before upload finished. Upload the file again to continue syncing.");
+      }
+      result = await uploadStorageFile({
+        userId,
+        file: pendingFile,
+        folderId: entry.folderId || null,
+        categoryId: entry.categoryId || null,
+        tags: entry.tags || [],
+        linkedTargets: entry.linkedIds || [],
+        workspaceId: entry.workspaceId || state.selectedVaultId || null,
+        onProgress: handleProgress,
+      });
+    }
+
+    entry.storageItemId = result.itemId || entry.storageItemId || null;
+    entry.storageVersionId = result.versionId || entry.storageVersionId || null;
+    entry.assetId = result.assetId || entry.assetId || null;
+    entry.storagePath = result.path || entry.storagePath || "";
+    entry.downloadUrl = result.publicUrl || entry.downloadUrl || "";
+    if (!entry.preview && entry.mimeType?.startsWith("image/")) entry.preview = result.publicUrl || entry.preview || "";
+    entry.remote = true;
+    entry.uploadStatus = "synced";
+    entry.progress = 1;
+    entry.syncError = "";
+    entry.pendingSyncPayload = null;
+    entry.updatedAt = Date.parse(result.updatedAt || new Date().toISOString());
+    entry.version = Number(result.versionNumber || entry.version || 1);
+    pendingStorageUploads.delete(entryId);
+    logStorageActivity("upload-synced", entry);
+    rerenderStorageSurfaces();
+    await refreshStorageFromCloud({ rerender: true, force: true });
+    return entry;
+  } catch (error) {
+    console.error("ForgeBook storage sync failed", error);
+    if (error?.recovery) {
+      entry.pendingSyncPayload = error.recovery;
+      entry.uploadStatus = "metadata-pending";
+      entry.progress = Math.max(0.74, Number(entry.progress || 0.74));
+      entry.syncError = error.message || "Storage metadata sync failed.";
+    } else {
+      entry.uploadStatus = "failed";
+      entry.progress = 0;
+      entry.syncError = error?.message || "Storage upload failed.";
+    }
+    logStorageActivity("upload-failed", entry);
+    rerenderStorageSurfaces();
+    showToast(entry.syncError, "warning");
+    return null;
+  }
 }
 
 function normalizeStorageState() {
@@ -2083,9 +2344,11 @@ function normalizeStorageState() {
   if (!state.fileVault.sort) state.fileVault.sort = state.settings.fileVault?.defaultSort || "recent";
   if (!state.fileVault.viewMode) state.fileVault.viewMode = state.settings.fileVault?.defaultViewMode || "grid";
   if (!state.fileVault.density) state.fileVault.density = state.settings.fileVault?.defaultDensity || "comfortable";
+  if (!state.fileVault.cloud || typeof state.fileVault.cloud !== "object") state.fileVault.cloud = { loading: false, lastSyncedAt: 0, error: "" };
   state.fileVault.files = state.fileVault.files.map(normalizeStorageFile);
   state.fileVault.folders = state.fileVault.folders.map((folder) => ({
     id: folder.id || uid(),
+    remoteId: folder.remoteId || folder.id || null,
     name: folder.name || "New Folder",
     parentId: folder.parentId || null,
     pinned: Boolean(folder.pinned),
@@ -2093,12 +2356,91 @@ function normalizeStorageState() {
     createdAt: Number(folder.createdAt || Date.now()),
     updatedAt: Number(folder.updatedAt || Date.now()),
     presetId: folder.presetId || "",
+    syncStatus: folder.syncStatus || (folder.remoteId ? "synced" : "pending"),
+    syncError: folder.syncError || "",
   }));
   state.fileVault.categories = state.fileVault.categories.map((category) => ({
     id: category.id || uid(),
+    remoteId: category.remoteId || category.id || null,
     name: category.name || "Category",
     color: category.color || "#8b5cf6",
+    createdAt: Number(category.createdAt || Date.now()),
+    updatedAt: Number(category.updatedAt || Date.now()),
+    syncStatus: category.syncStatus || (category.remoteId ? "synced" : "pending"),
+    syncError: category.syncError || "",
   }));
+}
+
+function mergeRemoteStorageState(remoteState) {
+  normalizeStorageState();
+  if (!remoteState) return;
+  const localFiles = [...fileVaultEntries()];
+  const merged = [];
+  const consumed = new Set();
+  const matchRemote = (remoteFile) => localFiles.find((candidate) => (
+    (candidate.storageItemId && remoteFile.storageItemId && candidate.storageItemId === remoteFile.storageItemId)
+      || (candidate.assetId && remoteFile.assetId && candidate.assetId === remoteFile.assetId)
+      || (candidate.storagePath && remoteFile.storagePath && candidate.storagePath === remoteFile.storagePath)
+  ));
+  (remoteState.files || []).forEach((remoteFile) => {
+    const localMatch = matchRemote(remoteFile);
+    if (localMatch) consumed.add(localMatch.id);
+    merged.push(normalizeStorageFile({
+      ...(localMatch || {}),
+      ...remoteFile,
+      id: localMatch?.id || remoteFile.id,
+      localObjectUrl: localMatch?.localObjectUrl || "",
+      preview: remoteFile.preview || localMatch?.preview || "",
+      downloadUrl: remoteFile.downloadUrl || localMatch?.downloadUrl || "",
+      uploadStatus: remoteFile.uploadStatus || "synced",
+      progress: 1,
+      syncError: "",
+      pendingSyncPayload: null,
+      remote: true,
+    }));
+  });
+  const pendingOnly = localFiles.filter((entry) => !consumed.has(entry.id) && storageNeedsAttention(entry));
+  state.fileVault.files = [...pendingOnly, ...merged].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  const remoteFolders = Array.isArray(remoteState.folders) ? remoteState.folders.map((entry) => ({ ...entry, syncStatus: "synced", syncError: "" })) : [];
+  const remoteCategories = Array.isArray(remoteState.categories) ? remoteState.categories.map((entry) => ({ ...entry, syncStatus: "synced", syncError: "" })) : [];
+  const localPendingFolders = state.fileVault.folders.filter((entry) => !entry.remoteId || entry.syncStatus === "failed");
+  const localPendingCategories = state.fileVault.categories.filter((entry) => !entry.remoteId || entry.syncStatus === "failed");
+  state.fileVault.folders = [...localPendingFolders.filter((entry) => !remoteFolders.some((remote) => remote.id === entry.id || remote.remoteId === entry.remoteId)), ...remoteFolders];
+  state.fileVault.categories = [...localPendingCategories.filter((entry) => !remoteCategories.some((remote) => remote.id === entry.id || remote.remoteId === entry.remoteId)), ...remoteCategories];
+  state.fileVault.versions = Array.isArray(remoteState.versions) ? remoteState.versions : state.fileVault.versions;
+  state.fileVault.links = Array.isArray(remoteState.links) ? remoteState.links : state.fileVault.links;
+  state.fileVault.activity = Array.isArray(remoteState.activity) ? remoteState.activity : state.fileVault.activity;
+}
+async function refreshStorageFromCloud({ rerender = true, force = false } = {}) {
+  normalizeStorageState();
+  const userId = activeRuntimeUser()?.id;
+  if (!storageSyncEnabled() || !userId) return null;
+  if (storageCloudRefreshPromise && !force) return storageCloudRefreshPromise;
+  state.fileVault.cloud.loading = true;
+  state.fileVault.cloud.error = "";
+  storageCloudRefreshPromise = fetchStorageLibrary(userId)
+    .then((remoteState) => {
+      mergeRemoteStorageState(remoteState);
+      state.fileVault.cloud.lastSyncedAt = Date.now();
+      state.fileVault.cloud.error = "";
+      save();
+      return remoteState;
+    })
+    .catch((error) => {
+      state.fileVault.cloud.error = error?.message || "Could not load storage files.";
+      console.error("ForgeBook storage refresh failed", error);
+      return null;
+    })
+    .finally(() => {
+      state.fileVault.cloud.loading = false;
+      storageCloudRefreshPromise = null;
+      if (rerender) {
+        renderChrome();
+        if (!els.overlayPanel?.classList.contains("hidden") && els.overlayCard?.classList.contains("overlay-card-chat")) renderFileVaultOverlay();
+        renderStorageWorkspace();
+      }
+    });
+  return storageCloudRefreshPromise;
 }
 
 function storageSelectionState(doc = activeDoc()) {
@@ -2384,6 +2726,7 @@ function renderStorageList(container, doc = activeDoc()) {
   container.className = `storage-file-grid storage-file-grid-${selection.viewMode || "grid"} storage-density-${selection.density || "comfortable"}`;
   container.innerHTML = files.length ? files.map((file) => {
     const folder = storageFolders().find((entry) => entry.id === file.folderId);
+    const linkedCount = (file.linkedIds || []).length;
     return `
       <article class="storage-file-card ${selectedIds.includes(file.id) ? "active" : ""}" data-storage-file="${escapeAttr(file.id)}">
         <div class="storage-file-card-head">
@@ -2393,31 +2736,30 @@ function renderStorageList(container, doc = activeDoc()) {
           </label>
           <div class="file-vault-icon">${escape(fileIcon(file))}</div>
           <div class="storage-file-copy">
-            <strong>${escape(file.name)}</strong>
-            <span>${escape(storageTypeLabel(file))} | ${escape(formatBytes(file.size))} | ${escape(formatRelativeTime(file.updatedAt || Date.now()))}</span>
+            <strong title="${escapeAttr(file.name)}">${escape(file.name)}</strong>
+            <span>${escape(storageTypeLabel(file))} ? ${escape(formatBytes(file.size))}</span>
+          </div>
+          <div class="storage-card-badges">
+            <span class="storage-sync-badge tone-${escapeAttr(storageSyncTone(file))}">${escape(storageSyncLabel(file))}</span>
+            ${file.favorite ? `<span class="notification-category-badge">Starred</span>` : ""}
           </div>
         </div>
         <div class="storage-file-card-meta">
           <span>${escape(folder?.name || "Root")}</span>
-          <div class="file-vault-flags">
-            ${file.uploadStatus && file.uploadStatus !== "ready" ? `<span class="notification-category-badge">${escape(file.uploadStatus)}</span>` : ""}
-            ${file.favorite ? `<span class="notification-category-badge">Starred</span>` : ""}
-            ${file.pinned ? `<span class="notification-category-badge">Pinned</span>` : ""}
-            ${file.deletedAt ? `<span class="notification-category-badge">Trash</span>` : ""}
-            ${file.archived && !file.deletedAt ? `<span class="notification-category-badge">Archived</span>` : ""}
-          </div>
+          <span>${escape(formatRelativeTime(file.updatedAt || Date.now()))}</span>
+          ${linkedCount ? `<span>${linkedCount} links</span>` : `<span>${escape(file.extension ? file.extension.toUpperCase() : "FILE")}</span>`}
         </div>
-        <div class="storage-file-card-actions">
-          <button class="secondary-button compact-action-button" type="button" data-storage-download="${escapeAttr(file.id)}">Download</button>
+        ${file.uploadStatus !== "synced" ? `<div class="storage-progress-row"><div class="storage-progress-track"><span style="width:${Math.max(6, Math.round((file.progress || 0) * 100))}%"></span></div>${file.syncError ? `<p class="storage-sync-error">${escape(file.syncError)}</p>` : ""}</div>` : ""}
+        <div class="storage-file-card-actions compact">
+          ${file.uploadStatus === "metadata-pending" || file.uploadStatus === "failed" || file.uploadStatus === "cleanup-failed" ? `<button class="secondary-button compact-action-button" type="button" data-storage-retry="${escapeAttr(file.id)}">Retry</button>` : `<button class="secondary-button compact-action-button" type="button" data-storage-download="${escapeAttr(file.id)}">Download</button>`}
           <button class="secondary-button compact-action-button" type="button" data-storage-star="${escapeAttr(file.id)}">${file.favorite ? "Unstar" : "Star"}</button>
-          <button class="secondary-button compact-action-button" type="button" data-storage-trash="${escapeAttr(file.id)}">${file.deletedAt ? "Restore" : "Trash"}</button>
         </div>
       </article>
     `;
   }).join("") : `
     <div class="storage-empty-state">
       <strong>No files in this view yet</strong>
-      <p>Upload files here, drop them into folders, and switch back to <strong>All</strong> if a smart view is hiding them.</p>
+      <p>Upload files here, organize them into folders, and keep an eye on sync state right from the browser.</p>
     </div>
   `;
 }
@@ -2427,19 +2769,41 @@ function renderStorageDetail(container, doc = activeDoc(), mode = "workspace") {
   const selection = storageSelectionState(doc);
   const selected = selectedStorageFile(doc) || visibleStorageFiles(doc)[0] || null;
   if (selected && !selection.selectedIds?.length) setStorageSelection([selected.id], doc);
-  container.innerHTML = selected ? `
-    <div class="file-vault-preview">
-      ${selected.preview && selected.mimeType?.startsWith("image/") ? `<img src="${escapeAttr(selected.preview)}" alt="${escapeAttr(selected.name)} preview" />` : `<div class="file-vault-preview-fallback">${escape(fileIcon(selected))}</div>`}
-    </div>
-    <div class="file-vault-meta">
-      <h4>${escape(selected.name)}</h4>
-      <p>${escape(storageTypeLabel(selected))} | ${escape(selected.mimeType || "Unknown type")} | ${escape(formatBytes(selected.size))}</p>
-      <div class="market-tag-row">${(selected.tags || []).map((tag) => `<span class="market-tag">${escape(tag)}</span>`).join("") || '<span class="empty-inline">No tags yet</span>'}</div>
-      <div class="document-card-actions">
-        <button class="secondary-button" type="button" data-storage-rename="${escapeAttr(selected.id)}">Rename</button>
-        <button class="secondary-button" type="button" data-storage-move="${escapeAttr(selected.id)}">Move</button>
-        <button class="secondary-button" type="button" data-storage-download="${escapeAttr(selected.id)}">Download</button>
-        <button class="secondary-button" type="button" data-storage-attach="${escapeAttr(selected.id)}">Attach</button>
+  if (!selected) {
+    container.innerHTML = `
+      <div class="storage-detail-empty">
+        <strong>No file selected</strong>
+        <p>Pick a file to review metadata, folder/category placement, version history, and cloud sync health.</p>
+      </div>
+    `;
+    return;
+  }
+  const folderOptions = [`<option value="">Root Storage</option>`, ...storageFolders().map((entry) => `<option value="${escapeAttr(entry.id)}" ${entry.id === selected.folderId ? "selected" : ""}>${escape(entry.name)}</option>`)].join("");
+  const versionsMarkup = (selected.versions || []).length
+    ? selected.versions.slice(0, 6).map((entry) => `<div class="context-link-card"><span>v${escape(String(entry.versionNumber || 1))}</span><strong>${escape(new Date(entry.createdAt || Date.now()).toLocaleString())}</strong></div>`).join("")
+    : '<div class="empty-inline">No version history yet.</div>';
+  const linkedMarkup = (selected.linkedIds || []).length
+    ? selected.linkedIds.slice(0, 8).map((entry) => `<div class="context-link-card"><span>Linked</span><strong>${escape(entry)}</strong></div>`).join("")
+    : '<div class="empty-inline">Nothing linked yet.</div>';
+  container.innerHTML = `
+    <div class="storage-detail-shell">
+      <div class="file-vault-preview storage-detail-preview">
+        ${selected.preview && selected.mimeType?.startsWith("image/") ? `<img src="${escapeAttr(selected.preview)}" alt="${escapeAttr(selected.name)} preview" />` : `<div class="file-vault-preview-fallback">${escape(fileIcon(selected))}</div>`}
+      </div>
+      <div class="storage-detail-status">
+        <span class="storage-sync-badge tone-${escapeAttr(storageSyncTone(selected))}">${escape(storageSyncLabel(selected))}</span>
+        ${selected.syncError ? `<p class="storage-sync-error">${escape(selected.syncError)}</p>` : `<p class="storage-detail-note">${escape(selected.remote ? "Stored in Supabase Storage and mirrored locally." : "Currently local-only until cloud sync succeeds.")}</p>`}
+        ${selected.uploadStatus !== "synced" ? `<div class="storage-progress-track"><span style="width:${Math.max(6, Math.round((selected.progress || 0) * 100))}%"></span></div>` : ""}
+      </div>
+      <label class="profile-field">
+        <span>Filename</span>
+        <input id="storageNameInput" class="modal-input" type="text" value="${escapeAttr(selected.name)}" />
+      </label>
+      <div class="storage-detail-grid">
+        <div class="context-link-card"><span>Type</span><strong>${escape(storageTypeLabel(selected))}</strong></div>
+        <div class="context-link-card"><span>Size</span><strong>${escape(formatBytes(selected.size))}</strong></div>
+        <div class="context-link-card"><span>Updated</span><strong>${escape(new Date(selected.updatedAt || Date.now()).toLocaleString())}</strong></div>
+        <div class="context-link-card"><span>Storage</span><strong>${escape(selected.storagePath || "Local pending")}</strong></div>
       </div>
       <label class="profile-field">
         <span>Tags</span>
@@ -2452,18 +2816,28 @@ function renderStorageDetail(container, doc = activeDoc(), mode = "workspace") {
           ${storageCategories().map((entry) => `<option value="${escapeAttr(entry.id)}" ${entry.id === selected.categoryId ? "selected" : ""}>${escape(entry.name)}</option>`).join("")}
         </select>
       </label>
-      <div class="storage-detail-grid">
-        <div class="context-link-card"><span>Folder</span><strong>${escape(storageFolders().find((entry) => entry.id === selected.folderId)?.name || "Root")}</strong></div>
-        <div class="context-link-card"><span>Version</span><strong>v${escape(String(selected.version || 1))}</strong></div>
-        <div class="context-link-card"><span>Owner</span><strong>${escape(selected.ownerId === state.profile.userId ? state.profile.name : "Collaborator")}</strong></div>
-        <div class="context-link-card"><span>Updated</span><strong>${escape(new Date(selected.updatedAt || Date.now()).toLocaleString())}</strong></div>
-      </div>
-    </div>
-  ` : `
-    <div class="storage-detail-empty">
-      <strong>Nothing selected</strong>
-      <p>Select a file to preview metadata, rename it, tag it, move it, or download it.</p>
-      <p>Tip: use the checkboxes for bulk actions, or click a folder on the left to narrow the browser.</p>
+      <label class="profile-field">
+        <span>Folder</span>
+        <select id="storageFolderSelect" class="modal-input">${folderOptions}</select>
+      </label>
+      <section class="context-section">
+        <div class="context-section-head"><div><p class="eyebrow">Linked files</p><h4>Connections</h4></div></div>
+        <div class="storage-detail-grid">${linkedMarkup}</div>
+      </section>
+      <section class="context-section">
+        <div class="context-section-head"><div><p class="eyebrow">Version history</p><h4>Versions</h4></div></div>
+        <div class="storage-detail-grid">${versionsMarkup}</div>
+      </section>
+      <section class="context-section danger-zone">
+        <div class="context-section-head"><div><p class="eyebrow">Actions</p><h4>Storage controls</h4></div></div>
+        <div class="document-card-actions">
+          <button class="secondary-button" type="button" data-storage-download="${escapeAttr(selected.id)}">Download</button>
+          <button class="secondary-button" type="button" data-storage-attach="${escapeAttr(selected.id)}">Attach file</button>
+          <button class="secondary-button" type="button" data-storage-move="${escapeAttr(selected.id)}">Move</button>
+          ${selected.uploadStatus === "metadata-pending" || selected.uploadStatus === "failed" || selected.uploadStatus === "cleanup-failed" ? `<button class="secondary-button" type="button" data-storage-retry="${escapeAttr(selected.id)}">Retry</button>` : ""}
+          <button class="secondary-button destructive" type="button" data-storage-trash="${escapeAttr(selected.id)}">${selected.deletedAt ? "Restore" : "Trash"}</button>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -2482,7 +2856,7 @@ function renderStorageFolderButtons(container, doc = activeDoc()) {
     return `
       <button class="storage-folder-button ${activeFilter === "all" && activeFolderId === folder.id ? "active" : ""}" type="button" data-storage-folder="${escapeAttr(folder.id)}" style="padding-left:${12 + depth * 18}px">
         <span>${folder.pinned ? "PIN" : "DIR"}</span>
-        <strong>${escape(folder.name)}</strong>
+        <strong>${escape(folder.name)}</strong>${folder.syncStatus && folder.syncStatus !== "synced" ? `<em class="storage-sync-inline">${escape(folder.syncStatus)}</em>` : ""}
       </button>
       ${childrenMarkup}
     `;
@@ -2518,11 +2892,15 @@ function renderStorageWorkspace() {
   if (!doc || doc.docType !== "storage") return;
   normalizeStorageState();
   normalizeStorageDoc(doc);
+  if (storageSyncEnabled() && !state.fileVault.cloud.loading && (!state.fileVault.cloud.lastSyncedAt || Date.now() - Number(state.fileVault.cloud.lastSyncedAt || 0) > 20000)) {
+    void refreshStorageFromCloud({ rerender: true });
+  }
   const files = visibleStorageFiles(doc);
   if (els.storageWorkspaceTitle) els.storageWorkspaceTitle.textContent = doc.name || "Storage";
   if (els.storageWorkspaceMeta) {
     const trashed = fileVaultEntries().filter((entry) => entry.deletedAt).length;
-    els.storageWorkspaceMeta.textContent = `${files.length} items | ${storageFolders().length} folders | ${trashed} trash`;
+    const syncing = fileVaultEntries().filter((entry) => storageNeedsAttention(entry)).length;
+    els.storageWorkspaceMeta.textContent = `${files.length} items | ${storageFolders().length} folders | ${trashed} trash${syncing ? ` | ${syncing} syncing` : ""}`;
   }
   if ($("#storageSearchInput")) $("#storageSearchInput").value = doc.storage.search || "";
   if (els.storageSortSelect) els.storageSortSelect.value = doc.storage.sort || "recent";
@@ -2641,14 +3019,19 @@ function bindStorageBrowserEvents(mode = "workspace") {
     event.stopPropagation();
     downloadStorageFile(button.dataset.storageDownload);
   }));
-  document.querySelectorAll("[data-storage-star]").forEach((button) => button.addEventListener("click", (event) => {
+  document.querySelectorAll("[data-storage-star]").forEach((button) => button.addEventListener("click", async (event) => {
     event.stopPropagation();
-    toggleStorageFavorite(button.dataset.storageStar);
+    await toggleStorageFavorite(button.dataset.storageStar);
     rerender();
   }));
-  document.querySelectorAll("[data-storage-trash]").forEach((button) => button.addEventListener("click", (event) => {
+  document.querySelectorAll("[data-storage-trash]").forEach((button) => button.addEventListener("click", async (event) => {
     event.stopPropagation();
-    toggleStorageTrash(button.dataset.storageTrash);
+    await toggleStorageTrash(button.dataset.storageTrash);
+    rerender();
+  }));
+  document.querySelectorAll("[data-storage-retry]").forEach((button) => button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await syncPendingStorageEntry(button.dataset.storageRetry);
     rerender();
   }));
   document.querySelectorAll("[data-storage-rename]").forEach((button) => button.addEventListener("click", () => promptRenameStorageFile(button.dataset.storageRename)));
@@ -2667,19 +3050,43 @@ function bindStorageBrowserEvents(mode = "workspace") {
     save();
     rerender();
   });
-  $("#fileVaultTagsInput2, #storageTagsInput")?.addEventListener("change", (event) => {
+  $("#fileVaultTagsInput2, #storageTagsInput")?.addEventListener("change", async (event) => {
     const file = selectedStorageFile(mode === "workspace" ? doc : null);
     if (!file) return;
+    const previous = [...(file.tags || [])];
     file.tags = String(event.target.value || "").split(",").map((entry) => entry.trim()).filter(Boolean);
     save();
     rerender();
+    if (file.storageItemId && storageSyncEnabled()) {
+      try {
+        await updateStorageItemAttributes(file.storageItemId, { tags: file.tags });
+        void refreshStorageFromCloud({ rerender: true, force: true });
+      } catch (error) {
+        console.error("ForgeBook storage tag sync failed", error);
+        file.tags = previous;
+        save();
+        rerender();
+      }
+    }
   });
-  $("#fileVaultCategorySelect, #storageCategorySelect")?.addEventListener("change", (event) => {
+  $("#fileVaultCategorySelect, #storageCategorySelect")?.addEventListener("change", async (event) => {
     const file = selectedStorageFile(mode === "workspace" ? doc : null);
     if (!file) return;
+    const previous = file.categoryId || null;
     file.categoryId = event.target.value || null;
     save();
     rerender();
+    if (file.storageItemId && storageSyncEnabled()) {
+      try {
+        await updateStorageItemAttributes(file.storageItemId, { category_id: file.categoryId || null });
+        void refreshStorageFromCloud({ rerender: true, force: true });
+      } catch (error) {
+        console.error("ForgeBook storage category sync failed", error);
+        file.categoryId = previous;
+        save();
+        rerender();
+      }
+    }
   });
 }
 
@@ -2752,29 +3159,83 @@ function downloadStorageFile(fileId) {
   save();
 }
 
-function toggleStorageFavorite(fileId) {
+async function toggleStorageFavorite(fileId) {
   const file = fileVaultEntries().find((entry) => entry.id === fileId);
   if (!file) return;
   file.favorite = !file.favorite;
   if (file.favorite) toggleWorkspaceFavorite(file.id);
   logStorageActivity(file.favorite ? "favorite" : "unfavorite", file);
   save();
+  if (file.storageItemId && storageSyncEnabled()) {
+    try {
+      await updateStorageItemAttributes(file.storageItemId, { is_favorite: file.favorite });
+      void refreshStorageFromCloud({ rerender: true, force: true });
+    } catch (error) {
+      console.error("ForgeBook storage favorite sync failed", error);
+      file.favorite = !file.favorite;
+      save();
+      showToast("Could not update favorite state", "warning");
+    }
+  }
 }
 
-function toggleStorageTrash(fileId) {
+async function toggleStorageTrash(fileId) {
   const file = fileVaultEntries().find((entry) => entry.id === fileId);
   if (!file) return;
+  const nextDeletedAt = file.deletedAt ? null : Date.now();
+  file.deletedAt = nextDeletedAt;
+  file.archived = Boolean(nextDeletedAt);
   if (file.deletedAt) {
-    file.deletedAt = null;
-    file.archived = false;
-    state.fileVault.trash = (state.fileVault.trash || []).filter((entry) => entry.id !== file.id);
-    logStorageActivity("restore", file);
-  } else {
-    file.deletedAt = Date.now();
     state.fileVault.trash = [...(state.fileVault.trash || []).filter((entry) => entry.id !== file.id), { id: file.id, deletedAt: file.deletedAt }];
     logStorageActivity("trash", file);
+  } else {
+    state.fileVault.trash = (state.fileVault.trash || []).filter((entry) => entry.id !== file.id);
+    logStorageActivity("restore", file);
   }
   save();
+  if (file.storageItemId && storageSyncEnabled()) {
+    try {
+      await updateStorageItemAttributes(file.storageItemId, {
+        deleted_at: file.deletedAt ? new Date(file.deletedAt).toISOString() : null,
+        is_archived: Boolean(file.deletedAt),
+      });
+      void refreshStorageFromCloud({ rerender: true, force: true });
+    } catch (error) {
+      console.error("ForgeBook storage trash sync failed", error);
+      file.deletedAt = file.deletedAt ? null : Date.now();
+      file.archived = Boolean(file.deletedAt);
+      save();
+      showToast("Could not update trash state", "warning");
+    }
+  }
+}
+
+
+async function deleteStorageFilePermanently(fileId) {
+  const file = fileVaultEntries().find((entry) => entry.id === fileId);
+  if (!file) return;
+  const previousFiles = [...state.fileVault.files];
+  const previousTrash = [...(state.fileVault.trash || [])];
+  state.fileVault.files = state.fileVault.files.filter((entry) => entry.id !== fileId);
+  state.fileVault.trash = (state.fileVault.trash || []).filter((entry) => entry.id !== fileId);
+  setStorageSelection((state.fileVault.selectedIds || []).filter((id) => id !== fileId), activeDoc()?.docType === "storage" ? activeDoc() : null);
+  rerenderStorageSurfaces();
+  if (file.storageItemId && storageSyncEnabled()) {
+    try {
+      const versionPaths = Array.isArray(file.versions) ? file.versions.map((entry) => entry.storagePath).filter(Boolean) : [];
+      await deleteStorageItemRecord({ itemId: file.storageItemId, assetPaths: [file.storagePath, ...versionPaths] });
+      logStorageActivity("delete", file);
+      void refreshStorageFromCloud({ rerender: true, force: true });
+    } catch (error) {
+      console.error("ForgeBook storage permanent delete failed", error);
+      state.fileVault.files = previousFiles;
+      state.fileVault.trash = previousTrash;
+      file.uploadStatus = "cleanup-failed";
+      file.syncError = error?.message || "Could not delete the remote file.";
+      rerenderStorageSurfaces();
+      showToast(file.syncError, "warning");
+    }
+  }
 }
 
 function promptRenameStorageFile(fileId) {
@@ -2786,14 +3247,28 @@ function promptRenameStorageFile(fileId) {
     message: "Update the file name while keeping its storage references intact.",
     confirmLabel: "Save Name",
     inputValue: file.name,
-    onConfirm: (value) => {
+    onConfirm: async (value) => {
       const next = value.trim();
       if (!next) return false;
+      const previous = file.name;
       file.name = next;
       file.updatedAt = Date.now();
       logStorageActivity("rename", file);
       save();
       render();
+      if (file.storageItemId && storageSyncEnabled()) {
+        try {
+          await updateStorageItemAttributes(file.storageItemId, { name: next });
+          void refreshStorageFromCloud({ rerender: true, force: true });
+        } catch (error) {
+          console.error("ForgeBook storage rename sync failed", error);
+          file.name = previous;
+          save();
+          render();
+          showToast("Could not rename file in cloud storage", "warning");
+          return false;
+        }
+      }
       return true;
     },
   });
@@ -2808,7 +3283,7 @@ function promptMoveStorageFile(fileId, selectedTargetId = null) {
     message: "Type a folder name to move this file, or leave empty to return it to the root.",
     confirmLabel: "Move File",
     inputValue: storageFolders().find((entry) => entry.id === file.folderId)?.name || "",
-    onConfirm: (value) => {
+    onConfirm: async (value) => {
       const next = value.trim();
       let folderId = null;
       if (next) {
@@ -2816,14 +3291,41 @@ function promptMoveStorageFile(fileId, selectedTargetId = null) {
         if (!folder) {
           folder = { id: uid(), name: next, parentId: null, pinned: false, archived: false, createdAt: Date.now(), updatedAt: Date.now(), presetId: "" };
           state.fileVault.folders.push(folder);
+          if (storageSyncEnabled()) {
+            try {
+              const remoteFolder = await createStorageFolderRecord({ userId: activeRuntimeUser().id, name: next, parentId: null, workspaceId: state.selectedVaultId || null });
+              Object.assign(folder, {
+                id: remoteFolder.id,
+                remoteId: remoteFolder.id,
+                createdAt: Date.parse(remoteFolder.created_at || new Date().toISOString()),
+                updatedAt: Date.parse(remoteFolder.updated_at || remoteFolder.created_at || new Date().toISOString()),
+              });
+            } catch (error) {
+              console.error("ForgeBook storage auto-folder sync failed", error);
+            }
+          }
         }
         folderId = folder.id;
       }
+      const previousFolderId = file.folderId || null;
       file.folderId = selectedTargetId || folderId;
       file.updatedAt = Date.now();
       logStorageActivity("move", file);
       save();
       render();
+      if (file.storageItemId && storageSyncEnabled()) {
+        try {
+          await updateStorageItemAttributes(file.storageItemId, { folder_id: file.folderId || null });
+          void refreshStorageFromCloud({ rerender: true, force: true });
+        } catch (error) {
+          console.error("ForgeBook storage move sync failed", error);
+          file.folderId = previousFolderId;
+          save();
+          render();
+          showToast("Could not move file in cloud storage", "warning");
+          return false;
+        }
+      }
       return true;
     },
   });
@@ -2838,10 +3340,10 @@ function promptCreateStorageFolder() {
     message: "Folders let you organize any file type by project, milestone, discipline, or any structure you want.",
     confirmLabel: "Create Folder",
     inputValue: "",
-    onConfirm: (value) => {
+    onConfirm: async (value) => {
       const next = value.trim();
       if (!next) return false;
-      state.fileVault.folders.push({
+      const localFolder = {
         id: uid(),
         name: next,
         parentId: targetParentId,
@@ -2850,9 +3352,33 @@ function promptCreateStorageFolder() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         presetId: "",
-      });
+        syncStatus: storageSyncEnabled() ? "pending" : "local-only",
+        syncError: "",
+      };
+      state.fileVault.folders.push(localFolder);
       save();
       render();
+      if (storageSyncEnabled()) {
+        try {
+          const remote = await createStorageFolderRecord({ userId: activeRuntimeUser().id, name: next, parentId: targetParentId, workspaceId: state.selectedVaultId || null });
+          Object.assign(localFolder, {
+            id: remote.id,
+            remoteId: remote.id,
+            createdAt: Date.parse(remote.created_at || new Date().toISOString()),
+            updatedAt: Date.parse(remote.updated_at || remote.created_at || new Date().toISOString()),
+            syncStatus: "synced",
+            syncError: "",
+          });
+          void refreshStorageFromCloud({ rerender: true, force: true });
+        } catch (error) {
+          console.error("ForgeBook storage folder create failed", error);
+          localFolder.syncStatus = "failed";
+          localFolder.syncError = error?.message || "Folder sync failed.";
+          save();
+          render();
+          showToast("Folder was created locally but not synced", "warning");
+        }
+      }
       return true;
     },
   });
@@ -2865,13 +3391,28 @@ function promptCreateStorageCategory() {
     message: "Categories help you build custom organization and filtering rules across the storage hub.",
     confirmLabel: "Create Category",
     inputValue: "",
-    onConfirm: (value) => {
+    onConfirm: async (value) => {
       const next = value.trim();
       if (!next) return false;
-      state.fileVault.categories.push({ id: uid(), name: next, color: "#8b5cf6" });
+      const localCategory = { id: uid(), name: next, color: "#8b5cf6", syncStatus: storageSyncEnabled() ? "pending" : "local-only", syncError: "" };
+      state.fileVault.categories.push(localCategory);
       state.fileVault.smartViews = [...new Set([...(state.fileVault.smartViews || []), next.toLowerCase()])];
       save();
       render();
+      if (storageSyncEnabled()) {
+        try {
+          const remote = await createStorageCategoryRecord({ userId: activeRuntimeUser().id, name: next, color: "#8b5cf6" });
+          Object.assign(localCategory, { id: remote.id, remoteId: remote.id, syncStatus: "synced", syncError: "" });
+          void refreshStorageFromCloud({ rerender: true, force: true });
+        } catch (error) {
+          console.error("ForgeBook storage category create failed", error);
+          localCategory.syncStatus = "failed";
+          localCategory.syncError = error?.message || "Category sync failed.";
+          save();
+          render();
+          showToast("Category was created locally but not synced", "warning");
+        }
+      }
       return true;
     },
   });
@@ -2924,7 +3465,7 @@ function handleStorageBulkAction(action, doc = activeDoc()) {
   render();
 }
 
-function handleFileVaultUpload(event) {
+async function handleFileVaultUpload(event) {
   normalizeStorageState();
   const files = [...(event.target.files || [])];
   if (!files.length) return;
@@ -2936,53 +3477,16 @@ function handleFileVaultUpload(event) {
   }
   const contextFolderId = fileVaultUploadContext?.folderId || (contextDoc?.docType === "storage" ? contextDoc.storage.activeFolderId : state.fileVault.activeFolderId) || null;
   files.forEach((file) => {
-    const reader = new FileReader();
-    const entry = {
-      id: uid(),
-      name: file.name,
-      type: file.name.split(".").at(-1)?.toUpperCase() || "Asset",
-      mimeType: file.type || "",
-      size: file.size || 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      preview: "",
-      downloadUrl: "",
-      folderId: contextFolderId,
-      categoryId: null,
-      tags: [],
-      labels: [],
-      favorite: false,
-      pinned: false,
-      shared: false,
-      archived: false,
-      deletedAt: null,
-      ownerId: state.profile.userId,
-      workspaceId: state.selectedVaultId || vaultId(contextDoc?.id) || null,
-      linkedIds: [contextDoc?.id].filter(Boolean),
-      version: 1,
-      extension: file.name.split(".").at(-1)?.toLowerCase() || "",
-      uploadStatus: "uploading",
-    };
+    const entry = createPendingStorageEntry(file, contextFolderId, contextDoc);
+    pendingStorageUploads.set(entry.id, file);
     state.fileVault.files.unshift(entry);
     setStorageSelection([entry.id], contextDoc?.docType === "storage" ? contextDoc : null);
-    const finish = (payload = "") => {
-      entry.preview = typeof payload === "string" ? payload : "";
-      entry.downloadUrl = typeof payload === "string" ? payload : "";
-      entry.uploadStatus = "ready";
-      logStorageActivity("upload", entry);
-      save();
-      renderChrome();
-      if (!els.overlayPanel?.classList.contains("hidden")) renderFileVaultOverlay();
-      renderStorageWorkspace();
-    };
-    reader.addEventListener("load", () => finish(reader.result));
-    reader.addEventListener("error", () => {
-      entry.uploadStatus = "failed";
-      save();
-      renderStorageWorkspace();
-      showToast(`Upload failed for ${file.name}`, "warning");
-    });
-    reader.readAsDataURL(file);
+    save();
+    renderChrome();
+    if (!els.overlayPanel?.classList.contains("hidden")) renderFileVaultOverlay();
+    renderStorageWorkspace();
+    if (storageSyncEnabled()) void syncPendingStorageEntry(entry.id);
+    else logStorageActivity("upload-local", entry);
   });
   fileVaultUploadContext = null;
   event.target.value = "";
@@ -6525,31 +7029,132 @@ function stopFloatingImageInteraction() {
   save();
 }
 
-function save() {
+function ensurePersistenceState() {
+  if (!state.persistence || typeof state.persistence !== "object") state.persistence = {};
+  if (!state.persistence.status || typeof state.persistence.status !== "object") state.persistence.status = {};
+  state.persistence.deviceId = state.persistence.deviceId || uid();
+  state.persistence.localRevision = Number(state.persistence.localRevision || 0);
+  state.persistence.cloudRevision = Number(state.persistence.cloudRevision || 0);
+  state.persistence.status = {
+    saved_local: Boolean(state.persistence.status.saved_local),
+    saving_local: Boolean(state.persistence.status.saving_local),
+    local_save_failed: Boolean(state.persistence.status.local_save_failed),
+    pending_cloud_sync: Boolean(state.persistence.status.pending_cloud_sync),
+    cloud_synced: Boolean(state.persistence.status.cloud_synced),
+    cloud_sync_failed: Boolean(state.persistence.status.cloud_sync_failed),
+    conflict: Boolean(state.persistence.status.conflict),
+    oversized_cloud_snapshot: Boolean(state.persistence.status.oversized_cloud_snapshot),
+    offline: Boolean(state.persistence.status.offline),
+    message: typeof state.persistence.status.message === "string" ? state.persistence.status.message : "",
+  };
+}
+
+function applyPersistenceStatusPatch(patch = {}) {
+  ensurePersistenceState();
+  Object.assign(state.persistence.status, patch);
+}
+
+function syncPersistenceStatusFromRuntime() {
+  const runtimeStatus = window.ForgeBookRuntime?.persistence?.status;
+  if (!runtimeStatus) return;
+  ensurePersistenceState();
+  Object.assign(state.persistence, {
+    localRevision: Number(runtimeStatus.localRevision || state.persistence.localRevision || 0),
+    cloudRevision: Number(runtimeStatus.cloudRevision || state.persistence.cloudRevision || 0),
+    lastLocalSaveAt: runtimeStatus.lastLocalSaveAt || state.persistence.lastLocalSaveAt || "",
+    lastCloudSyncAt: runtimeStatus.lastCloudSyncAt || state.persistence.lastCloudSyncAt || "",
+    cloudSnapshotUpdatedAt: runtimeStatus.cloudSnapshotUpdatedAt || state.persistence.cloudSnapshotUpdatedAt || "",
+    deviceId: runtimeStatus.deviceId || state.persistence.deviceId || uid(),
+  });
+  applyPersistenceStatusPatch(runtimeStatus);
+}
+
+function serializeStateForPersistence() {
+  ensurePersistenceState();
+  state.persistence.localRevision += 1;
+  state.persistence.lastLocalSaveAt = new Date().toISOString();
+  applyPersistenceStatusPatch({
+    saving_local: true,
+    saved_local: false,
+    local_save_failed: false,
+    pending_cloud_sync: true,
+    cloud_synced: false,
+    message: "Saving...",
+  });
+  const snapshot = JSON.stringify(state);
+  pendingSaveSnapshot = snapshot;
+  window.ForgeBookRuntime?.persistence?.markSavingLocal?.(snapshot);
+  const bufferResult = writeDirtyWorkspaceBuffer(snapshot);
+  if (!bufferResult.ok) {
+    applyPersistenceStatusPatch({
+      saving_local: false,
+      local_save_failed: true,
+      message: "Local save failed ? export backup now.",
+    });
+  }
+  return { snapshot, bufferResult };
+}
+
+function persistLocalSnapshot(snapshot, options = {}) {
+  const result = writeWorkspaceSnapshot(snapshot, options);
+  if (result.ok) {
+    lastWrittenSnapshot = snapshot;
+    lastSavedAt = new Date();
+    applyPersistenceStatusPatch({
+      saving_local: false,
+      saved_local: true,
+      local_save_failed: false,
+      message: "Saved locally",
+    });
+  } else {
+    applyPersistenceStatusPatch({
+      saving_local: false,
+      saved_local: false,
+      local_save_failed: true,
+      message: "Local save failed ? export backup now.",
+    });
+  }
+  syncPersistenceStatusFromRuntime();
+  return result;
+}
+
+function save(options = {}) {
+  const { snapshot } = serializeStateForPersistence();
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    pendingSaveSnapshot = JSON.stringify(state);
     if (pendingSaveSnapshot === lastWrittenSnapshot) {
       saveTimer = null;
       return;
     }
-    writeWorkspaceSnapshot(pendingSaveSnapshot);
-    lastWrittenSnapshot = pendingSaveSnapshot;
+    persistLocalSnapshot(pendingSaveSnapshot, options);
     saveTimer = null;
+    if (state.activeView === "workspace") updateDocumentState(savedStateLabel());
   }, SAVE_DEBOUNCE_MS);
-  lastSavedAt = new Date();
   if (state.activeView === "workspace") updateDocumentState(savedStateLabel());
+  return snapshot;
 }
 
-function flushSave() {
-  if (!pendingSaveSnapshot) pendingSaveSnapshot = JSON.stringify(state);
+function flushSave(options = {}) {
+  if (!pendingSaveSnapshot) {
+    try {
+      serializeStateForPersistence();
+    } catch (error) {
+      console.error("ForgeBook flush save serialization failed", error);
+      applyPersistenceStatusPatch({ local_save_failed: true, saving_local: false, message: "Local save failed ? export backup now." });
+      return { ok: false, error };
+    }
+  }
   if (saveTimer) {
     window.clearTimeout(saveTimer);
     saveTimer = null;
   }
-  if (pendingSaveSnapshot === lastWrittenSnapshot) return;
-  writeWorkspaceSnapshot(pendingSaveSnapshot);
-  lastWrittenSnapshot = pendingSaveSnapshot;
+  if (pendingSaveSnapshot === lastWrittenSnapshot) {
+    syncPersistenceStatusFromRuntime();
+    return { ok: true, skipped: true };
+  }
+  const result = persistLocalSnapshot(pendingSaveSnapshot, options);
+  if (state.activeView === "workspace") updateDocumentState(savedStateLabel());
+  return result;
 }
 
 function scheduleLibraryRender() {
@@ -7544,14 +8149,29 @@ function workspaceNodeVisible(node) {
   return false;
 }
 
+function persistenceSummaryLabel() {
+  syncPersistenceStatusFromRuntime();
+  ensurePersistenceState();
+  const status = state.persistence.status;
+  if (status.local_save_failed) return "Local save failed";
+  if (status.conflict) return "Conflict detected";
+  if (status.oversized_cloud_snapshot) return "Cloud sync blocked";
+  if (status.cloud_sync_failed) return "Cloud sync failed";
+  if (status.offline) return status.saved_local ? "Saved locally / offline" : "Offline";
+  if (status.saving_local) return "Saving...";
+  if (status.pending_cloud_sync) return "Saved locally / syncing cloud";
+  if (lastSavedAt) return `Saved ${lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return "Saved";
+}
+
 function updateDocumentState(label) {
   if (!els.documentStateBadge) return;
   els.documentStateBadge.textContent = label;
+  els.documentStateBadge.dataset.tone = /failed|blocked|conflict/i.test(label) ? "warning" : /saving|syncing/i.test(label) ? "info" : "success";
 }
 
 function savedStateLabel() {
-  if (!lastSavedAt) return "Saved";
-  return `Saved ${lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return persistenceSummaryLabel();
 }
 
 function showToast(message, tone = "default") {
@@ -8279,7 +8899,7 @@ function openBoardCardDetails(cardId) {
       </section>
       <section class="context-section">
         <p class="eyebrow">Attachments</p>
-        <div id="boardDetailAttachments">${(card.attachments || []).length ? card.attachments.map((entry) => `<div class="context-link-card"><strong>${escape(entry)}</strong></div>`).join("") : '<div class="empty-state">No attachments yet.</div>'}</div>
+        <div id="boardDetailAttachments">${(card.attachments || []).length ? card.attachments.map((entry) => `<div class="context-link-card"><strong>${escape(typeof entry === "string" ? entry : entry?.name || entry?.id || "Attachment")}</strong>${typeof entry === "object" && entry?.id ? `<span>${escape(entry.id)}</span>` : ""}</div>`).join("") : '<div class="empty-state">No attachments yet.</div>'}</div>
       </section>
       <section class="context-section">
         <p class="eyebrow">Comments</p>
@@ -8457,3 +9077,14 @@ function renderWorkspaceStatus(doc, vault) {
     els.workspaceStatusSecondary.textContent = `${counts} files | ${saved}${meta} | Ctrl+S save | Ctrl+K switch | Ctrl+F search`;
   }
 }
+
+
+
+
+
+
+
+
+
+
+

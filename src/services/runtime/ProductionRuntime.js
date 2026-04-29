@@ -1,22 +1,47 @@
 import { ENV, isSupabaseConfigured } from "../../constants/env.js";
-import { WORKSPACE_STORAGE_KEYS } from "../../utils/constants.js";
-import { debounce } from "../../utils/performance.js";
 import { getAuthenticatedUser, getSession, onAuthStateChange, signInWithPassword, signOut, signUpWithPassword } from "../auth/AuthService.js";
 import { fetchMarketplaceProfiles } from "../database/MarketplaceRepository.js";
 import { ensureProfile } from "../database/ProfileRepository.js";
-import { fetchWorkspaceSnapshot, persistWorkspaceSnapshot } from "../database/WorkspaceRepository.js";
+import { clearWorkspaceConflict } from "../../app/storage.js";
 
 const AUTH_RESTORE_STORAGE_KEY = "forgebook.auth.restore";
 const AUTH_RESTORE_WINDOW_MS = 1000 * 60 * 60 * 24 * 14;
-const MIN_PRODUCTION_SYNC_INTERVAL_MS = 12000;
+
+function createPersistenceStatus() {
+  return {
+    saved_local: false,
+    saving_local: false,
+    local_save_failed: false,
+    pending_cloud_sync: false,
+    cloud_synced: false,
+    cloud_sync_failed: false,
+    conflict: false,
+    oversized_cloud_snapshot: false,
+    offline: !navigator.onLine,
+    message: "",
+    localRevision: 0,
+    cloudRevision: 0,
+    lastLocalSaveAt: "",
+    lastCloudSyncAt: "",
+    cloudSnapshotUpdatedAt: "",
+    deviceId: "",
+  };
+}
 
 export async function initProductionRuntime({ createBaseStateSnapshot }) {
-  let queuedSnapshot = null;
-  let lastPersistedSnapshot = null;
-  let isPersistingSnapshot = false;
   let activeAuthUserId = null;
   let authTransitionInFlight = false;
   let authGateTimer = null;
+  const persistenceStatus = createPersistenceStatus();
+
+  const publishPersistenceStatus = () => {
+    window.dispatchEvent(new CustomEvent("forgebook:persistence-status", { detail: { ...persistenceStatus } }));
+  };
+
+  const setPersistenceStatus = (patch) => {
+    Object.assign(persistenceStatus, patch);
+    publishPersistenceStatus();
+  };
 
   const rememberAuthUser = (userId) => {
     if (!userId) return;
@@ -89,40 +114,8 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }, 900);
   };
 
-  const flushWorkspaceSnapshot = async () => {
-    if (!runtime.auth.user || !isSupabaseConfigured() || !queuedSnapshot || isPersistingSnapshot) return;
-    if (queuedSnapshot === lastPersistedSnapshot) {
-      queuedSnapshot = null;
-      return;
-    }
-    const snapshot = queuedSnapshot;
-    queuedSnapshot = null;
-    isPersistingSnapshot = true;
-    try {
-      await persistWorkspaceSnapshot(runtime.auth.user.id, snapshot);
-      lastPersistedSnapshot = snapshot;
-    } catch (error) {
-      console.error("ForgeBook cloud sync failed", error);
-      queuedSnapshot = snapshot;
-    } finally {
-      isPersistingSnapshot = false;
-      if (queuedSnapshot && queuedSnapshot !== lastPersistedSnapshot) {
-        scheduleWorkspaceFlush();
-      }
-    }
-  };
-
-  const effectiveWorkspaceSyncIntervalMs = Math.max(
-    Number(ENV.workspaceSyncIntervalMs) || 0,
-    MIN_PRODUCTION_SYNC_INTERVAL_MS,
-  );
-
-  const scheduleWorkspaceFlush = debounce(() => {
-    void flushWorkspaceSnapshot();
-  }, effectiveWorkspaceSyncIntervalMs);
-
   const runtime = {
-    mode: isSupabaseConfigured() ? "supabase" : "local",
+    mode: isSupabaseConfigured() ? "supabase-social" : "local-only",
     env: ENV,
     auth: {
       user: null,
@@ -132,13 +125,56 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
       signOut,
     },
     persistence: {
-      async persistWorkspaceSnapshot(snapshot) {
-        if (!runtime.auth.user || !isSupabaseConfigured()) return;
-        if (snapshot === lastPersistedSnapshot || snapshot === queuedSnapshot) return;
-        queuedSnapshot = snapshot;
-        scheduleWorkspaceFlush();
+      status: persistenceStatus,
+      setLocalWriteResult(result, snapshot) {
+        let metadata = null;
+        try {
+          metadata = snapshot ? JSON.parse(snapshot)?.persistence || null : null;
+        } catch {}
+        setPersistenceStatus({
+          saving_local: false,
+          saved_local: Boolean(result?.ok),
+          local_save_failed: !result?.ok,
+          pending_cloud_sync: false,
+          cloud_synced: false,
+          cloud_sync_failed: false,
+          oversized_cloud_snapshot: false,
+          lastLocalSaveAt: metadata?.lastLocalSaveAt || new Date().toISOString(),
+          localRevision: Number(metadata?.localRevision || persistenceStatus.localRevision || 0),
+          deviceId: metadata?.deviceId || persistenceStatus.deviceId || "",
+          message: result?.ok ? "Saved locally to vault" : "Local save failed - export backup now.",
+        });
       },
-      flushWorkspaceSnapshot,
+      markSavingLocal(snapshot) {
+        let metadata = null;
+        try {
+          metadata = snapshot ? JSON.parse(snapshot)?.persistence || null : null;
+        } catch {}
+        setPersistenceStatus({
+          saving_local: true,
+          saved_local: false,
+          local_save_failed: false,
+          pending_cloud_sync: false,
+          cloud_synced: false,
+          cloud_sync_failed: false,
+          localRevision: Number(metadata?.localRevision || persistenceStatus.localRevision || 0),
+          deviceId: metadata?.deviceId || persistenceStatus.deviceId || "",
+          message: "Saving locally...",
+        });
+      },
+      markConflict(reason) {
+        setPersistenceStatus({ conflict: true, message: reason || "Workspace conflict detected" });
+      },
+      clearConflict() {
+        clearWorkspaceConflict();
+        setPersistenceStatus({ conflict: false });
+      },
+      async persistWorkspaceSnapshot() {
+        return { ok: true, skipped: true, localFirst: true };
+      },
+      async flushWorkspaceSnapshot() {
+        return { ok: true, skipped: true, localFirst: true };
+      },
     },
     data: {
       marketProfiles: [],
@@ -146,7 +182,11 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     },
   };
 
-  if (!isSupabaseConfigured()) return runtime;
+  if (!isSupabaseConfigured()) {
+    setPersistenceStatus({ message: "Local-first mode active" });
+    publishPersistenceStatus();
+    return runtime;
+  }
 
   let { session, user } = await getSession();
   if (!user && hasRecentRememberedAuthUser()) {
@@ -163,8 +203,6 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
 
   if (user) {
     runtime.data.profile = await ensureProfile(user, createBaseStateSnapshot().profile);
-    const snapshot = await fetchWorkspaceSnapshot(user.id);
-    if (snapshot) hydrateWorkspaceSnapshot(snapshot);
     try {
       runtime.data.marketProfiles = await fetchMarketplaceProfiles();
     } catch (error) {
@@ -172,15 +210,8 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }
   }
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      void flushWorkspaceSnapshot();
-    }
-  });
-
-  window.addEventListener("beforeunload", () => {
-    void flushWorkspaceSnapshot();
-  });
+  window.addEventListener("online", () => setPersistenceStatus({ offline: false, message: persistenceStatus.saved_local ? "Back online - social sync available" : "Back online" }));
+  window.addEventListener("offline", () => setPersistenceStatus({ offline: true, message: "Offline - vault stays local, social is unavailable" }));
 
   if (ENV.requireAuth && !user) {
     scheduleAuthGateMount(runtime);
@@ -202,8 +233,11 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
       unmountAuthGate();
       try {
         runtime.data.profile = await ensureProfile(nextSession.user, createBaseStateSnapshot().profile);
-        const snapshot = await fetchWorkspaceSnapshot(nextSession.user.id);
-        if (snapshot) hydrateWorkspaceSnapshot(snapshot);
+        try {
+          runtime.data.marketProfiles = await fetchMarketplaceProfiles();
+        } catch (error) {
+          console.error("ForgeBook market refresh failed", error);
+        }
         activeAuthUserId = nextUserId;
       } finally {
         authTransitionInFlight = false;
@@ -219,15 +253,9 @@ export async function initProductionRuntime({ createBaseStateSnapshot }) {
     }
   });
 
+  setPersistenceStatus({ message: "Local-first vault mode active" });
+  publishPersistenceStatus();
   return runtime;
-}
-
-function hydrateWorkspaceSnapshot(snapshot) {
-  WORKSPACE_STORAGE_KEYS.forEach((key) => {
-    if (key === WORKSPACE_STORAGE_KEYS[0] || key === WORKSPACE_STORAGE_KEYS[2]) {
-      localStorage.setItem(key, snapshot);
-    }
-  });
 }
 
 function mountAuthGate(runtime) {

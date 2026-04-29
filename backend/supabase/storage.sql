@@ -13,7 +13,7 @@ for insert
 to authenticated
 with check (
   bucket_id = 'forgebook-assets'
-  and (storage.foldername(name))[1] in ('profiles', 'market', 'attachments')
+  and (storage.foldername(name))[1] in ('profiles', 'market', 'attachments', 'storage')
 );
 
 create policy "owner update forgebook assets"

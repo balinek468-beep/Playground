@@ -12,6 +12,22 @@ async function fetchProfilesByIds(client, userIds) {
   return new Map((data || []).map((entry) => [entry.id, entry]));
 }
 
+async function ensureFriendshipRows(client, senderId, receiverId, createdAt = new Date().toISOString()) {
+  const rows = [
+    { user_id: senderId, friend_id: receiverId, created_at: createdAt },
+    { user_id: receiverId, friend_id: senderId, created_at: createdAt },
+  ];
+  const { error } = await client
+    .from("friendships")
+    .upsert(rows, { onConflict: "user_id,friend_id" });
+  if (error) throw error;
+}
+
+async function rollbackFriendshipRows(client, senderId, receiverId) {
+  await client.from("friendships").delete().eq("user_id", senderId).eq("friend_id", receiverId);
+  await client.from("friendships").delete().eq("user_id", receiverId).eq("friend_id", senderId);
+}
+
 export async function fetchFriendNetwork(userId) {
   const client = getSupabaseClient();
   if (!client || !userId) {
@@ -148,26 +164,39 @@ export async function acceptFriendRequest(requestId, userId) {
     .eq("receiver_id", userId)
     .single();
   if (requestError) throw requestError;
-  if (!request || request.status !== "pending") return request;
+  if (!request) return null;
+
+  if (request.status === "accepted") {
+    await ensureFriendshipRows(client, request.sender_id, request.receiver_id);
+    return request;
+  }
+  if (request.status !== "pending") return request;
 
   const now = new Date().toISOString();
+
+  try {
+    await ensureFriendshipRows(client, request.sender_id, request.receiver_id, now);
+  } catch (error) {
+    const next = new Error(error.message || "Could not create friendship rows.");
+    next.code = "friendship_create_failed";
+    next.cause = error;
+    throw next;
+  }
 
   const { error: updateError } = await client
     .from("friend_requests")
     .update({ status: "accepted", updated_at: now })
     .eq("id", requestId)
-    .eq("receiver_id", userId);
-  if (updateError) throw updateError;
+    .eq("receiver_id", userId)
+    .eq("status", "pending");
 
-  const rows = [
-    { user_id: request.sender_id, friend_id: request.receiver_id, created_at: now },
-    { user_id: request.receiver_id, friend_id: request.sender_id, created_at: now },
-  ];
+  if (updateError) {
+    await rollbackFriendshipRows(client, request.sender_id, request.receiver_id).catch(() => null);
+    const next = new Error(updateError.message || "Could not finalize friend request acceptance.");
+    next.code = "friend_request_finalize_failed";
+    next.cause = updateError;
+    throw next;
+  }
 
-  const { error: friendshipError } = await client
-    .from("friendships")
-    .upsert(rows, { onConflict: "user_id,friend_id" });
-  if (friendshipError) throw friendshipError;
-
-  return request;
+  return { ...request, status: "accepted" };
 }

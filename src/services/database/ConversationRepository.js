@@ -1,5 +1,59 @@
 import { getSupabaseClient } from "../auth/supabaseClient.js";
 
+const CONVERSATION_RETRY_KEY = "forgebook-conversation-retry-v1";
+
+function safeLocalStorageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readConversationRetryQueue() {
+  const raw = safeLocalStorageGet(CONVERSATION_RETRY_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeConversationRetryQueue(entries) {
+  safeLocalStorageSet(CONVERSATION_RETRY_KEY, JSON.stringify(entries || []));
+}
+
+function queueConversationTouch(conversationId, updatedAt) {
+  const queue = readConversationRetryQueue().filter((entry) => entry?.conversationId !== conversationId);
+  queue.unshift({ conversationId, updatedAt });
+  writeConversationRetryQueue(queue.slice(0, 50));
+}
+
+async function flushConversationTouchQueue(client) {
+  const queue = readConversationRetryQueue();
+  if (!queue.length) return;
+  const remaining = [];
+  for (const entry of queue) {
+    const { error } = await client
+      .from("conversations")
+      .update({ updated_at: entry.updatedAt })
+      .eq("id", entry.conversationId);
+    if (error) remaining.push(entry);
+  }
+  writeConversationRetryQueue(remaining);
+}
+
 async function fetchProfilesByIds(client, userIds) {
   const ids = [...new Set((userIds || []).filter(Boolean))];
   if (!ids.length) return [];
@@ -19,6 +73,8 @@ export async function fetchConversationNetwork(userId) {
       profiles: [],
     };
   }
+
+  await flushConversationTouchQueue(client).catch(() => null);
 
   const { data: memberships, error: membershipError } = await client
     .from("conversation_members")
@@ -42,8 +98,7 @@ export async function fetchConversationNetwork(userId) {
     client
       .from("conversations")
       .select("id, type, name, created_by, created_at, updated_at")
-      .in("id", conversationIds)
-      .order("updated_at", { ascending: false }),
+      .in("id", conversationIds),
     client
       .from("conversation_members")
       .select("conversation_id, user_id, role, joined_at")
@@ -77,27 +132,34 @@ export async function fetchConversationNetwork(userId) {
     messageMap.set(entry.conversation_id, bucket);
   });
 
+  const mapped = (conversations || []).map((conversation) => {
+    const members = memberMap.get(conversation.id) || [];
+    const memberIds = members.map((entry) => entry.user_id);
+    const directCounterpartId =
+      conversation.type === "direct"
+        ? memberIds.find((memberId) => memberId !== userId) || userId
+        : null;
+    const directCounterpart = directCounterpartId ? profileMap.get(directCounterpartId) : null;
+    const conversationMessages = messageMap.get(conversation.id) || [];
+    const latestMessageAt = conversationMessages.at(-1)?.created_at || conversation.updated_at || conversation.created_at;
+    return {
+      ...conversation,
+      effectiveUpdatedAt: latestMessageAt,
+      name:
+        conversation.type === "direct"
+          ? directCounterpart?.nickname || conversation.name || "Direct message"
+          : conversation.name || "Team chat",
+      memberIds,
+      members,
+      messages: conversationMessages,
+    };
+  });
+
+  mapped.sort((a, b) => new Date(b.effectiveUpdatedAt || 0).getTime() - new Date(a.effectiveUpdatedAt || 0).getTime());
+
   return {
     profiles,
-    conversations: (conversations || []).map((conversation) => {
-      const members = memberMap.get(conversation.id) || [];
-      const memberIds = members.map((entry) => entry.user_id);
-      const directCounterpartId =
-        conversation.type === "direct"
-          ? memberIds.find((memberId) => memberId !== userId) || userId
-          : null;
-      const directCounterpart = directCounterpartId ? profileMap.get(directCounterpartId) : null;
-      return {
-        ...conversation,
-        name:
-          conversation.type === "direct"
-            ? directCounterpart?.nickname || conversation.name || "Direct message"
-            : conversation.name || "Team chat",
-        memberIds,
-        members,
-        messages: messageMap.get(conversation.id) || [],
-      };
-    }),
+    conversations: mapped,
   };
 }
 
@@ -214,7 +276,13 @@ export async function appendConversationMessage({ conversationId, authorId, cont
     .from("conversations")
     .update({ updated_at: now })
     .eq("id", conversationId);
-  if (conversationUpdateError) throw conversationUpdateError;
+  if (conversationUpdateError) {
+    queueConversationTouch(conversationId, now);
+    return {
+      ...data,
+      conversationMetadataPending: true,
+    };
+  }
 
   return data;
 }

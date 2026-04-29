@@ -5,6 +5,8 @@ import { APP_NAME } from "../utils/constants.js";
 import { getSession } from "../services/auth/AuthService.js";
 import { initProductionRuntime } from "../services/runtime/ProductionRuntime.js";
 import { mountPublicApp } from "../public/PublicApp.js";
+import { prepareLocalFirstWorkspaceBoot } from "./storage.js";
+import { initializeUpdater } from "../services/desktop/UpdaterService.js";
 
 function normalizeRoute(pathname) {
   const path = String(pathname || "/").replace(/\/+$/, "") || "/";
@@ -13,11 +15,18 @@ function normalizeRoute(pathname) {
 }
 
 async function bootProtectedApp() {
+  const [vaultBoot, updater] = await Promise.all([
+    prepareLocalFirstWorkspaceBoot(),
+    initializeUpdater({ currentVersion: "0.1.0" }),
+  ]);
+
   const productionRuntime = await initProductionRuntime({
     createBaseStateSnapshot,
   });
 
   window.ForgeBookRuntime = productionRuntime;
+  window.ForgeBookUpdater = updater;
+  window.ForgeBookVaultBoot = vaultBoot;
   document.querySelector("#publicRoot")?.classList.add("hidden");
   document.querySelector(".app-shell")?.classList.remove("hidden");
   document.body.dataset.appMode = "workspace";
@@ -31,6 +40,8 @@ async function bootProtectedApp() {
     features: featureRegistry,
     mode: "legacy-bridge",
     runtime: productionRuntime.mode,
+    storage: vaultBoot?.provider || "browser",
+    updaterEnabled: Boolean(updater?.enabled),
   };
 }
 
@@ -66,5 +77,3 @@ window.addEventListener("popstate", () => {
 });
 
 await boot();
-
-

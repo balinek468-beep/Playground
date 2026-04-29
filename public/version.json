@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "channel": "stable",
+  "releaseDate": "2026-04-29T00:00:00Z",
+  "notes": [
+    "Local-first vault architecture scaffolded.",
+    "Supabase social layer kept separate from vault content.",
+    "Desktop updater feed prepared for future Tauri builds."
+  ],
+  "downloads": {
+    "windows": "https://github.com/your-org/forgebook/releases/latest"
+  }
+}
