@@ -1,13 +1,13 @@
 {
   "version": "0.1.0",
-  "channel": "stable",
-  "releaseDate": "2026-04-29T00:00:00Z",
+  "channel": "desktop preview",
+  "releaseDate": "2026-05-02T00:00:00Z",
   "notes": [
-    "Local-first vault architecture scaffolded.",
-    "Supabase social layer kept separate from vault content.",
-    "Desktop updater feed prepared for future Tauri builds."
+    "Desktop workspace boot is smoother and more stable.",
+    "Tester profiles now support nickname-based local account creation.",
+    "The public website now acts as a download landing page for the desktop build."
   ],
   "downloads": {
-    "windows": "https://github.com/your-org/forgebook/releases/latest"
+    "windows": "https://github.com/balinek468-beep/Playground/releases/latest"
   }
 }

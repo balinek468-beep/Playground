@@ -407,6 +407,15 @@ function setBootCache(value) {
   }
 }
 
+export function resetWorkspaceBootRuntime() {
+  try {
+    vaultWatchRuntime?.stop?.();
+  } catch {}
+  vaultWatchRuntime = null;
+  cachedVaultRuntime = null;
+  setBootCache(null);
+}
+
 function mergeRecoveryWarnings(primary = [], secondary = []) {
   return Array.from(new Set([...(primary || []), ...(secondary || [])]));
 }

@@ -1,85 +1,153 @@
-import { signInWithPassword, signUpWithPassword } from "../services/auth/AuthService.js";
+const DEFAULT_RELEASE = {
+  version: "0.1.0",
+  channel: "desktop preview",
+  releaseDate: "",
+  notes: [
+    "Desktop vaults and local workspace boot are active.",
+    "Tester profiles now use a simple nickname plus a stable FG ID.",
+    "Public web routes now point people to the desktop download flow.",
+  ],
+  downloads: {
+    windows: "",
+  },
+};
+
+let cachedRelease = null;
+let releasePromise = null;
 
 function navigate(path) {
   if (window.location.pathname === path) return;
   window.history.pushState({}, "", path);
-  mountPublicApp({ route: path, user: window.ForgeBookRuntime?.auth?.user || null });
+  mountPublicApp({ route: path, user: null });
 }
 
-function redirectToApp() {
-  window.location.assign("/app");
+function normalizeRelease(raw = {}) {
+  return {
+    version: String(raw?.version || DEFAULT_RELEASE.version),
+    channel: String(raw?.channel || DEFAULT_RELEASE.channel),
+    releaseDate: String(raw?.releaseDate || DEFAULT_RELEASE.releaseDate),
+    notes: Array.isArray(raw?.notes) && raw.notes.length ? raw.notes : DEFAULT_RELEASE.notes,
+    downloads: {
+      windows: String(raw?.downloads?.windows || raw?.downloadUrl || DEFAULT_RELEASE.downloads.windows),
+    },
+  };
+}
+
+function isPlaceholderDownloadUrl(url = "") {
+  return /your-org\/forgebook/i.test(String(url));
+}
+
+function resolveWindowsDownloadUrl(release) {
+  const candidate = String(release?.downloads?.windows || "").trim();
+  if (!candidate || isPlaceholderDownloadUrl(candidate)) return "";
+  return candidate;
+}
+
+async function loadRelease() {
+  if (cachedRelease) return cachedRelease;
+  if (!releasePromise) {
+    releasePromise = fetch("/version.json", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        cachedRelease = normalizeRelease(payload || DEFAULT_RELEASE);
+        return cachedRelease;
+      })
+      .catch(() => {
+        cachedRelease = normalizeRelease(DEFAULT_RELEASE);
+        return cachedRelease;
+      });
+  }
+  return releasePromise;
+}
+
+function formatReleaseDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "Testing build";
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function featureCards() {
   return [
-    ["Canvas Planning", "Map gameplay systems, loops, flows, milestones, and dependencies visually."],
-    ["Design Documentation", "Build GDDs, feature specs, production notes, and structured design docs."],
-    ["Balancing Sheets", "Tune progression, economy, combat values, and live balancing data in one place."],
-    ["Project Management", "Track milestones, boards, tasks, approvals, and production health."],
-    ["Developer Marketplace", "Publish roles, discover collaborators, and connect with specialists."],
-    ["Storage Hub", "Keep game files, exports, references, and assets organized inside the workspace."],
-    ["Social Layer", "Use friends, DMs, collaboration spaces, and team communication without leaving ForgeBook."],
+    ["Local-First Vaults", "Keep notes, boards, sheets, and files inside the desktop workspace instead of scattering test data across browser storage."],
+    ["Nickname-Based Testing", "Create a lightweight tester identity with only a nickname while the social layer stays easy to test with friends."],
+    ["Stable FG Profile IDs", "Each tester gets a persistent ForgeBook ID you can copy, share, and use to find each other in-app."],
+    ["Desktop Workflow", "Launch into the workspace faster, keep file watching active, and test the actual app experience instead of a web shell."],
   ];
 }
 
-function audiencePills() {
+function launchSteps() {
   return [
-    "Game Designers",
-    "Creative Directors",
-    "Project Managers",
-    "Balancers",
-    "Development Teams",
-    "Indie Studios",
-    "Solo Developers",
+    ["Download the build", "Grab the latest Windows preview from this page and launch the desktop app."],
+    ["Choose a nickname", "ForgeBook creates your tester profile locally with a stable FG ID for friend testing."],
+    ["Share your FG ID", "Open your profile in the app and copy your ID so your friend can find you quickly."],
+    ["Test together", "Use friends, DMs, vault workflows, and the rest of the desktop app without full account auth yet."],
   ];
 }
 
-function publicNavigation(user) {
+function routeNotice(route) {
+  if (route === "/signup") {
+    return "Account creation now starts inside the desktop app with a nickname.";
+  }
+  if (route === "/login") {
+    return "The public site is now the desktop download page. Existing testing happens in the app.";
+  }
+  return "";
+}
+
+function publicNavigation(release) {
+  const downloadUrl = resolveWindowsDownloadUrl(release);
   return `
     <header class="public-nav premium-surface">
       <a class="public-brand" href="/" data-public-route="/">
         <span class="public-brand-mark">F</span>
         <div>
           <strong>ForgeBook</strong>
-          <span>Game production workspace</span>
+          <span>Desktop workspace for game teams</span>
         </div>
       </a>
       <nav class="public-nav-links">
-        <a href="/#features" data-public-anchor="features">Features</a>
-        <a href="/#about" data-public-anchor="about">About</a>
-        <a href="${user ? "/app" : "/login"}" data-public-route="${user ? "/app" : "/login"}">${user ? "Open Workspace" : "Login"}</a>
-        <a href="${user ? "/app" : "/signup"}" class="primary-button compact-action-button" data-public-route="${user ? "/app" : "/signup"}">${user ? "Enter App" : "Get Started"}</a>
+        <a href="/#download" data-public-anchor="download">Download</a>
+        <a href="/#desktop" data-public-anchor="desktop">Why Desktop</a>
+        <a href="/#release-notes" data-public-anchor="release-notes">Release Notes</a>
+        ${downloadUrl
+          ? `<a href="${downloadUrl}" class="primary-button compact-action-button" target="_blank" rel="noreferrer">Download for Windows</a>`
+          : `<span class="primary-button compact-action-button button-disabled">Windows Link Pending</span>`}
       </nav>
     </header>
   `;
 }
 
-function heroPreview() {
+function heroPreview(release) {
   return `
-    <div class="public-preview premium-surface" id="product-preview">
+    <div class="public-preview premium-surface" id="download">
       <div class="public-preview-stage">
-        <div class="public-preview-canvas">
-          <div class="preview-node preview-node-feature">Combat Loop</div>
-          <div class="preview-node preview-node-sticky">Economy Risk</div>
-          <div class="preview-node preview-node-card">Milestone Roadmap</div>
+        <div class="public-preview-canvas public-download-canvas">
+          <span class="public-download-badge">Desktop Preview</span>
+          <div class="preview-node preview-node-feature">Pick Nickname</div>
+          <div class="preview-node preview-node-sticky">FG Tester ID</div>
+          <div class="preview-node preview-node-card">Local Vault</div>
           <div class="preview-link preview-link-a"></div>
           <div class="preview-link preview-link-b"></div>
         </div>
         <div class="public-preview-stack">
           <article class="public-preview-panel">
-            <p class="eyebrow">Board</p>
-            <strong>Production Tracking</strong>
-            <span>Milestones, blockers, and approvals</span>
+            <p class="eyebrow">Latest build</p>
+            <strong>v${release.version}</strong>
+            <span>${formatReleaseDate(release.releaseDate)} | ${release.channel}</span>
           </article>
           <article class="public-preview-panel">
-            <p class="eyebrow">Sheet</p>
-            <strong>Balancing Workspace</strong>
-            <span>Economy values, tuning, and comparisons</span>
+            <p class="eyebrow">Tester identity</p>
+            <strong>Nickname first</strong>
+            <span>Accounts are lightweight for testing, but each device still gets a stable FG profile ID.</span>
           </article>
           <article class="public-preview-panel">
-            <p class="eyebrow">Market</p>
-            <strong>Developer Discovery</strong>
-            <span>Roles, availability, and collaboration</span>
+            <p class="eyebrow">Shared flow</p>
+            <strong>Friend testing ready</strong>
+            <span>Download, pick a name, swap IDs, and jump into messages and collaboration flows faster.</span>
           </article>
         </div>
       </div>
@@ -87,43 +155,58 @@ function heroPreview() {
   `;
 }
 
-function renderLanding(user) {
+function renderDownloadButton(release, extraClass = "") {
+  const downloadUrl = resolveWindowsDownloadUrl(release);
+  const className = `primary-button compact-action-button${extraClass ? ` ${extraClass}` : ""}`;
+  if (downloadUrl) {
+    return `<a href="${downloadUrl}" class="${className}" target="_blank" rel="noreferrer">Download for Windows</a>`;
+  }
+  return `<span class="${className} button-disabled">Windows Link Pending</span>`;
+}
+
+function renderLanding(route, release) {
+  const notice = routeNotice(route);
+  const downloadUrl = resolveWindowsDownloadUrl(release);
   return `
     <section class="public-shell">
-      ${publicNavigation(user)}
+      ${publicNavigation(release)}
       <main class="public-main">
+        ${notice ? `
+          <section class="public-route-notice premium-surface">
+            <p>${notice}</p>
+          </section>
+        ` : ""}
+
         <section class="public-hero">
           <div class="public-hero-copy">
-            <p class="eyebrow">Built for serious game teams</p>
-            <h1>The workspace built for game designers, project managers, and development teams.</h1>
-            <p class="public-lead">Plan systems. Balance gameplay. Organize production. Recruit developers. Keep everything in one workspace designed for game production instead of generic office work.</p>
+            <p class="eyebrow">ForgeBook has moved into the desktop app</p>
+            <h1>Download the desktop build, choose a nickname, and start testing with your friend.</h1>
+            <p class="public-lead">The public website now points to the app itself. ForgeBook boots into a local-first desktop workspace, creates a lightweight tester identity with just a nickname, and gives each tester a stable FG ID for social testing.</p>
             <div class="public-hero-actions">
-              <a href="/signup" class="primary-button compact-action-button" data-public-route="/signup">Get Started</a>
-              <a href="#product-preview" class="secondary-button compact-action-button" data-public-anchor="product-preview">View Demo</a>
-              <a href="/login" class="secondary-button compact-action-button" data-public-route="/login">Login</a>
+              ${renderDownloadButton(release)}
+              <a href="#release-notes" class="secondary-button compact-action-button" data-public-anchor="release-notes">See Release Notes</a>
             </div>
             <div class="public-proof-strip">
-              <span>Canvas planning</span>
-              <span>Balancing sheets</span>
-              <span>Boards and docs</span>
-              <span>Marketplace and social</span>
+              <span>Desktop vaults</span>
+              <span>Nickname-based testing</span>
+              <span>Stable FG IDs</span>
+              <span>Friend messages and social flows</span>
             </div>
+            <div class="public-release-strip">
+              <span class="public-release-chip">Version ${release.version}</span>
+              <span class="public-release-chip">${release.channel}</span>
+              <span class="public-release-chip">${formatReleaseDate(release.releaseDate)}</span>
+            </div>
+            <p class="public-download-small">${downloadUrl ? "Latest Windows build is available now." : "The page is ready for downloads. Add your real Windows release URL in version.json to activate the button."}</p>
           </div>
-          ${heroPreview()}
+          ${heroPreview(release)}
         </section>
 
-        <section class="public-section" id="about">
+        <section class="public-section" id="desktop">
           <div class="public-section-copy">
-            <p class="eyebrow">What is ForgeBook</p>
-            <h2>One production environment for game planning, execution, and collaboration.</h2>
-            <p>ForgeBook is a professional workspace designed specifically for game development teams. Instead of splitting work across whiteboards, docs, boards, spreadsheets, storage tools, recruitment sites, and chat apps, ForgeBook brings those workflows into one environment built around game production.</p>
-          </div>
-        </section>
-
-        <section class="public-section" id="features">
-          <div class="public-section-copy">
-            <p class="eyebrow">Core tools</p>
-            <h2>Everything the team needs, connected in one system.</h2>
+            <p class="eyebrow">Why the switch</p>
+            <h2>The site is now a launcher page. The real experience is the desktop workspace.</h2>
+            <p>Instead of signing up on the website first, testers download the app, set a nickname locally, and start using the actual desktop workflow you are shipping. That keeps feedback focused on the app instead of the old web auth shell.</p>
           </div>
           <div class="public-feature-grid">
             ${featureCards().map(([title, body]) => `
@@ -137,32 +220,63 @@ function renderLanding(user) {
 
         <section class="public-section public-two-column">
           <div class="public-section-copy">
-            <p class="eyebrow">Who it is for</p>
-            <h2>Built for roles that need structure and speed.</h2>
-            <div class="public-pill-grid">
-              ${audiencePills().map((label) => `<span class="public-pill">${label}</span>`).join("")}
+            <p class="eyebrow">Testing flow</p>
+            <h2>How your friend gets in.</h2>
+            <div class="public-step-grid">
+              ${launchSteps().map(([title, body]) => `
+                <article class="public-step-card premium-surface">
+                  <strong>${title}</strong>
+                  <p>${body}</p>
+                </article>
+              `).join("")}
             </div>
           </div>
           <div class="public-section-copy">
-            <p class="eyebrow">Why ForgeBook</p>
-            <h2>Better than stitching generic tools together.</h2>
-            <ul class="public-value-list">
-              <li>Built specifically for game development workflows</li>
-              <li>Combines planning, documentation, management, storage, social, and recruitment</li>
-              <li>Reduces tool fragmentation and context switching</li>
-              <li>Keeps production logic, files, and collaboration in one place</li>
+            <p class="eyebrow">Platform status</p>
+            <h2>Current release target.</h2>
+            <div class="public-platform-list">
+              <article class="public-platform-row premium-surface">
+                <div>
+                  <strong>Windows Desktop</strong>
+                  <p>Primary Tauri target for the current testing cycle.</p>
+                </div>
+                <span class="public-status-badge is-live">Ready</span>
+              </article>
+              <article class="public-platform-row premium-surface">
+                <div>
+                  <strong>Browser Preview</strong>
+                  <p>Still useful for local experiments, but the public site now focuses on the real desktop app.</p>
+                </div>
+                <span class="public-status-badge is-limited">Limited</span>
+              </article>
+              <article class="public-platform-row premium-surface">
+                <div>
+                  <strong>macOS / Linux</strong>
+                  <p>Not part of this testing push yet.</p>
+                </div>
+                <span class="public-status-badge is-planned">Later</span>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="public-section" id="release-notes">
+          <div class="public-section-copy">
+            <p class="eyebrow">Release notes</p>
+            <h2>What is in this desktop build.</h2>
+            <ul class="public-note-list">
+              ${release.notes.map((note) => `<li>${note}</li>`).join("")}
             </ul>
           </div>
         </section>
 
         <section class="public-cta premium-surface">
           <div>
-            <p class="eyebrow">Start using ForgeBook</p>
-            <h2>Understand the product first. Enter the workspace when you are ready.</h2>
+            <p class="eyebrow">Ready to test</p>
+            <h2>Download ForgeBook, pick your nickname, and test the desktop app directly.</h2>
           </div>
           <div class="public-hero-actions">
-            <a href="/signup" class="primary-button compact-action-button" data-public-route="/signup">Create Account</a>
-            <a href="/login" class="secondary-button compact-action-button" data-public-route="/login">Login</a>
+            ${renderDownloadButton(release, "public-cta-button")}
           </div>
         </section>
       </main>
@@ -170,54 +284,16 @@ function renderLanding(user) {
   `;
 }
 
-function renderAuth(route, user) {
-  const mode = route === "/signup" ? "signup" : "login";
-  return `
-    <section class="public-shell public-shell-auth">
-      ${publicNavigation(user)}
-      <main class="public-auth-main">
-        <section class="public-auth-copy">
-          <p class="eyebrow">${mode === "signup" ? "Create your workspace" : "Welcome back"}</p>
-          <h1>${mode === "signup" ? "Start using ForgeBook." : "Sign in to ForgeBook."}</h1>
-          <p>${mode === "signup"
-            ? "Create your account to open the ForgeBook workspace, manage projects, publish to the market, and collaborate with your team."
-            : "Sign in to access your vaults, documents, boards, messages, storage, and market profile."}</p>
-          <div class="public-auth-points">
-            <span>Protected workspace access</span>
-            <span>Persistent profile identity</span>
-            <span>Cross-device collaboration</span>
-          </div>
-        </section>
-        <section class="public-auth-card premium-surface">
-          <p class="eyebrow">${mode === "signup" ? "Get started" : "Workspace access"}</p>
-          <h2>${mode === "signup" ? "Create Account" : "Login"}</h2>
-          <form id="publicAuthForm" class="public-auth-form">
-            <input id="publicAuthEmail" class="modal-input" type="email" placeholder="Email" required />
-            <input id="publicAuthPassword" class="modal-input" type="password" placeholder="Password" required />
-            <input id="publicAuthName" class="modal-input ${mode === "signup" ? "" : "hidden"}" type="text" placeholder="Display name" ${mode === "signup" ? "required" : ""} />
-            <button id="publicAuthSubmit" class="primary-button" type="submit">${mode === "signup" ? "Create Account" : "Login"}</button>
-          </form>
-          <p id="publicAuthError" class="auth-gate-error hidden"></p>
-          <div class="public-auth-switch">
-            <span>${mode === "signup" ? "Already have an account?" : "New to ForgeBook?"}</span>
-            <a href="${mode === "signup" ? "/login" : "/signup"}" data-public-route="${mode === "signup" ? "/login" : "/signup"}">${mode === "signup" ? "Login" : "Create Account"}</a>
-          </div>
-        </section>
-      </main>
-    </section>
-  `;
-}
-
-function bindPublicEvents(route) {
+function bindPublicEvents() {
   document.querySelectorAll("[data-public-route]").forEach((link) => {
     link.addEventListener("click", (event) => {
       const target = link.getAttribute("data-public-route");
       if (!target) return;
-      if (target === "/app") return;
       event.preventDefault();
       navigate(target);
     });
   });
+
   document.querySelectorAll("[data-public-anchor]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
@@ -226,42 +302,25 @@ function bindPublicEvents(route) {
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
-
-  const form = document.querySelector("#publicAuthForm");
-  if (!form) return;
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const errorBox = document.querySelector("#publicAuthError");
-    const email = document.querySelector("#publicAuthEmail")?.value || "";
-    const password = document.querySelector("#publicAuthPassword")?.value || "";
-    const name = document.querySelector("#publicAuthName")?.value || "";
-    if (errorBox) {
-      errorBox.textContent = "";
-      errorBox.classList.add("hidden");
-    }
-    try {
-      if (route === "/signup") {
-        await signUpWithPassword({ email, password, metadata: { name } });
-      } else {
-        await signInWithPassword({ email, password });
-      }
-      redirectToApp();
-    } catch (error) {
-      if (errorBox) {
-        errorBox.textContent = error?.message || "Authentication failed.";
-        errorBox.classList.remove("hidden");
-      }
-    }
-  });
 }
 
-export function mountPublicApp({ route = "/", user = null } = {}) {
+function renderPublicRoute(route, release) {
   const publicRoot = document.querySelector("#publicRoot");
   const appShell = document.querySelector(".app-shell");
   if (!publicRoot || !appShell) return;
   publicRoot.classList.remove("hidden");
   appShell.classList.add("hidden");
   document.body.dataset.appMode = "public";
-  publicRoot.innerHTML = route === "/login" || route === "/signup" ? renderAuth(route, user) : renderLanding(user);
-  bindPublicEvents(route);
+  document.title = "ForgeBook Desktop | Download";
+  publicRoot.innerHTML = renderLanding(route, release);
+  bindPublicEvents();
+}
+
+export function mountPublicApp({ route = "/", user = null } = {}) {
+  void user;
+  renderPublicRoute(route, cachedRelease || normalizeRelease(DEFAULT_RELEASE));
+  void loadRelease().then((release) => {
+    if (document.body.dataset.appMode !== "public") return;
+    renderPublicRoute(route, release);
+  });
 }

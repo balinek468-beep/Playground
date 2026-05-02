@@ -3,7 +3,6 @@ import { createStorageProvider } from "../storage/providers/createStorageProvide
 import {
   createVault as createDesktopVault,
   getAppPaths,
-  isDesktop,
   isDesktopEnvironment,
   listRecentVaults,
   loadVault as loadDesktopVault,
@@ -53,12 +52,12 @@ export async function listVaultFiles(vaultId, options = {}) {
 }
 
 export async function pickVaultFolder() {
-  if (!isDesktop) return null;
+  if (!isDesktopEnvironment()) return null;
   return selectVaultFolder();
 }
 
 export async function getRecentVaults() {
-  if (!isDesktop) return [];
+  if (!isDesktopEnvironment()) return [];
   return listRecentVaults();
 }
 

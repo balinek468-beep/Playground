@@ -22,7 +22,7 @@ async function invokeTauri(command, payload = {}) {
 export const isDesktop = typeof window !== "undefined" && Boolean(getDesktopApi() || getGlobalTauriInvoke());
 
 export function isDesktopEnvironment() {
-  return isDesktop;
+  return typeof window !== "undefined" && Boolean(getDesktopApi() || getGlobalTauriInvoke());
 }
 
 export async function desktopCall(method, payload = {}) {
@@ -53,6 +53,7 @@ export async function desktopCall(method, payload = {}) {
   if (!command) throw new Error(`Unsupported desktop method: ${method}`);
   const result = await invokeTauri(command, payload);
   if (result == null) {
+    if (method === "selectVaultFolder" || method === "readTextFile") return null;
     throw new Error(`Desktop bridge unavailable for ${method}`);
   }
   return result;

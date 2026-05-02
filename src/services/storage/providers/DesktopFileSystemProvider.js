@@ -18,6 +18,10 @@ function normalizePath(path = "/") {
   return collapsed.startsWith("/") ? collapsed.replace(/\/+$/g, "") : `/${collapsed.replace(/\/+$/g, "")}`;
 }
 
+function isDesktopStorageDisabled() {
+  return typeof window !== "undefined" && Boolean(window.__FORGEBOOK_DISABLE_DESKTOP_STORAGE__);
+}
+
 export class DesktopFileSystemProvider {
   constructor(options = {}) {
     this.kind = "desktop";
@@ -124,6 +128,6 @@ export class DesktopFileSystemProvider {
 }
 
 export function createDesktopFileSystemProvider(options = {}) {
-  if (!isDesktopEnvironment()) return null;
+  if (!isDesktopEnvironment() || isDesktopStorageDisabled()) return null;
   return new DesktopFileSystemProvider(options);
 }
