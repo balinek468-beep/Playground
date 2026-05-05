@@ -93,6 +93,14 @@ body[data-app-mode="public"] .app-shell {
   padding-top: 18px;
 }
 
+.public-download-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(360px, 1.08fr);
+  gap: 28px;
+  align-items: start;
+  padding-top: 18px;
+}
+
 .public-hero-copy,
 .public-section-copy {
   display: grid;
@@ -237,7 +245,9 @@ body[data-app-mode="public"] .app-shell {
 .public-preview-panel strong,
 .public-feature-card h3,
 .public-auth-card h2,
-.public-cta h2 {
+.public-cta h2,
+.public-download-card h2,
+.public-info-card h2 {
   margin: 0;
   font-size: 1.1rem;
 }
@@ -308,6 +318,83 @@ body[data-app-mode="public"] .app-shell {
 .public-download-small {
   margin: 0;
   color: rgba(222, 236, 252, 0.7);
+  font-size: 0.88rem;
+}
+
+.public-download-card,
+.public-info-card {
+  padding: 24px;
+  display: grid;
+  gap: 18px;
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(17, 22, 33, 0.96), rgba(11, 15, 23, 0.96));
+}
+
+.public-download-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.public-download-card-copy,
+.public-info-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.public-download-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.public-download-detail {
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 6px;
+}
+
+.public-download-detail span {
+  color: rgba(214, 231, 255, 0.72);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.public-download-detail strong {
+  font-size: 1rem;
+}
+
+.public-download-actions,
+.public-download-cta-actions {
+  display: grid;
+  gap: 10px;
+  align-items: start;
+}
+
+.public-download-primary {
+  justify-self: start;
+}
+
+.public-download-support-link {
+  color: #d9ebff;
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.public-download-support-link:hover,
+.public-download-support-link:focus-visible {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.public-download-support-link-cta {
   font-size: 0.88rem;
 }
 
@@ -410,6 +497,7 @@ body[data-app-mode="public"] .app-shell {
   color: var(--muted);
   display: grid;
   gap: 10px;
+  line-height: 1.6;
 }
 
 .public-cta {
@@ -463,6 +551,7 @@ body[data-app-mode="public"] .app-shell {
 
 @media (max-width: 1080px) {
   .public-hero,
+  .public-download-hero,
   .public-auth-main,
   .public-two-column,
   .public-preview-stage {
@@ -495,5 +584,18 @@ body[data-app-mode="public"] .app-shell {
 
   .public-platform-row {
     flex-direction: column;
+  }
+
+  .public-download-card,
+  .public-info-card {
+    padding: 20px;
+  }
+
+  .public-download-card-head {
+    flex-direction: column;
+  }
+
+  .public-download-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

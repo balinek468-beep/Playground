@@ -10,9 +10,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_updater::{Update, UpdaterExt};
 use tempfile::NamedTempFile;
-use url::Url;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -21,7 +19,7 @@ const BACKUP_LIMIT: usize = 8;
 const WATCH_EVENT_NAME: &str = "forgebook://vault-watch";
 
 #[derive(Debug, thiserror::Error)]
-enum ForgeBookDesktopError {
+enum DesktopError {
     #[error("{0}")]
     Message(String),
     #[error(transparent)]
@@ -32,22 +30,6 @@ enum ForgeBookDesktopError {
     Serde(#[from] serde_json::Error),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
-    #[error(transparent)]
-    Updater(#[from] tauri_plugin_updater::Error),
-    #[error(transparent)]
-    Dialog(#[from] tauri_plugin_dialog::Error),
-}
-
-type CommandResult<T> = Result<T, DesktopErrorPayload>;
-
-impl From<ForgeBookDesktopError> for DesktopErrorPayload {
-    fn from(value: ForgeBookDesktopError) -> Self {
-        DesktopErrorPayload {
-            code: "forgebook_desktop_error".into(),
-            message: value.to_string(),
-            details: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +39,42 @@ struct DesktopErrorPayload {
     message: String,
     details: Option<String>,
 }
+
+impl From<DesktopError> for DesktopErrorPayload {
+    fn from(value: DesktopError) -> Self {
+        Self {
+            code: "forgebook_desktop_error".into(),
+            message: value.to_string(),
+            details: None,
+        }
+    }
+}
+
+impl From<std::io::Error> for DesktopErrorPayload {
+    fn from(value: std::io::Error) -> Self {
+        DesktopError::from(value).into()
+    }
+}
+
+impl From<notify::Error> for DesktopErrorPayload {
+    fn from(value: notify::Error) -> Self {
+        DesktopError::from(value).into()
+    }
+}
+
+impl From<serde_json::Error> for DesktopErrorPayload {
+    fn from(value: serde_json::Error) -> Self {
+        DesktopError::from(value).into()
+    }
+}
+
+impl From<tauri::Error> for DesktopErrorPayload {
+    fn from(value: tauri::Error) -> Self {
+        DesktopError::from(value).into()
+    }
+}
+
+type CommandResult<T> = Result<T, DesktopErrorPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct DesktopConfig {
@@ -70,7 +88,6 @@ struct ForgeBookDesktopState {
     config_path: PathBuf,
     config: Mutex<DesktopConfig>,
     watchers: Mutex<HashMap<String, RecommendedWatcher>>,
-    pending_update: Mutex<Option<Update>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,35 +201,39 @@ struct WatchPathRequest {
     recursive: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnwatchPathRequest {
+    watcher_id: String,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct UpdateCheckRequest {
     current_version: Option<String>,
     feed_url: Option<String>,
-    pubkey: Option<String>,
 }
 
 fn now_timestamp_string() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    seconds.to_string()
+    now_timestamp_for(SystemTime::now())
 }
 
-fn default_base_dir(app: &AppHandle) -> Result<PathBuf, ForgeBookDesktopError> {
+fn now_timestamp_for(time: SystemTime) -> String {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
+}
+
+fn default_base_dir(app: &AppHandle) -> Result<PathBuf, DesktopError> {
     app.path()
         .document_dir()
         .or_else(|_| app.path().home_dir())
-        .map_err(|error| ForgeBookDesktopError::Message(format!("Could not resolve a default data directory: {error}")))
+        .map_err(|error| DesktopError::Message(format!("Could not resolve a default data directory: {error}")))
 }
 
 fn forgebook_root_from_base(base_dir: &Path) -> PathBuf {
-    if base_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some(APP_FOLDER_NAME)
-    {
+    if base_dir.file_name().and_then(|name| name.to_str()) == Some(APP_FOLDER_NAME) {
         base_dir.to_path_buf()
     } else {
         base_dir.join(APP_FOLDER_NAME)
@@ -220,11 +241,7 @@ fn forgebook_root_from_base(base_dir: &Path) -> PathBuf {
 }
 
 fn base_dir_from_root(root: &Path) -> PathBuf {
-    if root
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some(APP_FOLDER_NAME)
-    {
+    if root.file_name().and_then(|name| name.to_str()) == Some(APP_FOLDER_NAME) {
         root.parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.to_path_buf())
@@ -235,39 +252,30 @@ fn base_dir_from_root(root: &Path) -> PathBuf {
 
 fn forgebook_root_for_path(path: &Path) -> Option<PathBuf> {
     path.ancestors()
-        .find(|ancestor| {
-            ancestor
-                .file_name()
-                .and_then(|name| name.to_str())
-                == Some(APP_FOLDER_NAME)
-        })
+        .find(|ancestor| ancestor.file_name().and_then(|name| name.to_str()) == Some(APP_FOLDER_NAME))
         .map(Path::to_path_buf)
 }
 
-fn ensure_config_loaded(state: &ForgeBookDesktopState) -> Result<DesktopConfig, ForgeBookDesktopError> {
-    let mut guard = state
+fn load_config(state: &ForgeBookDesktopState) -> Result<DesktopConfig, DesktopError> {
+    state
         .config
         .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Desktop config lock poisoned".into()))?;
-    if guard.active_base_dir.is_none() && state.config_path.exists() {
-        let raw = fs::read_to_string(&state.config_path)?;
-        *guard = serde_json::from_str(&raw).unwrap_or_default();
-    }
-    Ok(guard.clone())
+        .map_err(|_| DesktopError::Message("Desktop config lock poisoned".into()))
+        .map(|config| config.clone())
 }
 
-fn save_config(state: &ForgeBookDesktopState, next: &DesktopConfig) -> Result<(), ForgeBookDesktopError> {
+fn save_config(state: &ForgeBookDesktopState, next: &DesktopConfig) -> Result<(), DesktopError> {
     fs::create_dir_all(&state.config_dir)?;
-    atomic_write_json(&state.config_path, next, None)?;
-    let mut guard = state
+    atomic_write_json(&state.config_path, next)?;
+    let mut config = state
         .config
         .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Desktop config lock poisoned".into()))?;
-    *guard = next.clone();
+        .map_err(|_| DesktopError::Message("Desktop config lock poisoned".into()))?;
+    *config = next.clone();
     Ok(())
 }
 
-fn ensure_forgebook_root(root: &Path) -> Result<(), ForgeBookDesktopError> {
+fn ensure_forgebook_root(root: &Path) -> Result<(), DesktopError> {
     fs::create_dir_all(root.join("vaults"))?;
     fs::create_dir_all(root.join(".forgebook").join("backups"))?;
     fs::create_dir_all(root.join(".forgebook").join("conflicts"))?;
@@ -293,8 +301,8 @@ fn remember_loaded_vault(config: &mut DesktopConfig, vault_path: &Path) {
     }
 }
 
-fn current_paths(app: &AppHandle, state: &ForgeBookDesktopState) -> Result<AppPathsPayload, ForgeBookDesktopError> {
-    let config = ensure_config_loaded(state)?;
+fn current_paths(app: &AppHandle, state: &ForgeBookDesktopState) -> Result<AppPathsPayload, DesktopError> {
+    let config = load_config(state)?;
     let base_dir = config
         .active_base_dir
         .as_ref()
@@ -307,17 +315,13 @@ fn current_paths(app: &AppHandle, state: &ForgeBookDesktopState) -> Result<AppPa
         forgebook_dir: forgebook_dir.to_string_lossy().to_string(),
         vaults_dir: forgebook_dir.join("vaults").to_string_lossy().to_string(),
         app_config_dir: state.config_dir.to_string_lossy().to_string(),
-        recent_vaults: config.recent_vault_roots,
-        last_opened_vault: config.last_opened_vault,
+        recent_vaults: config.recent_vault_roots.clone(),
+        last_opened_vault: config.last_opened_vault.clone(),
     })
 }
 
 fn normalize_selected_root(selection: &Path) -> PathBuf {
-    if selection
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some(APP_FOLDER_NAME)
-    {
+    if selection.file_name().and_then(|name| name.to_str()) == Some(APP_FOLDER_NAME) {
         selection.to_path_buf()
     } else if selection.join("vaults").exists() || selection.join(".forgebook").exists() {
         selection.to_path_buf()
@@ -326,30 +330,28 @@ fn normalize_selected_root(selection: &Path) -> PathBuf {
     }
 }
 
-fn canonicalize_for_check(path: &Path) -> Result<PathBuf, ForgeBookDesktopError> {
+fn canonicalize_for_check(path: &Path) -> Result<PathBuf, DesktopError> {
     if path.exists() {
         return Ok(fs::canonicalize(path)?);
     }
     let parent = path
         .parent()
-        .ok_or_else(|| ForgeBookDesktopError::Message("Path has no parent".into()))?;
+        .ok_or_else(|| DesktopError::Message("Path has no parent".into()))?;
     let canonical_parent = fs::canonicalize(parent)?;
     Ok(canonical_parent.join(path.file_name().unwrap_or_default()))
 }
 
-fn is_path_allowed(app: &AppHandle, state: &ForgeBookDesktopState, path: &Path) -> Result<(), ForgeBookDesktopError> {
-    let config = ensure_config_loaded(state)?;
-    let mut allowed_roots = Vec::new();
+fn is_path_allowed(app: &AppHandle, state: &ForgeBookDesktopState, path: &Path) -> Result<(), DesktopError> {
+    let config = load_config(state)?;
     let current_base = config
         .active_base_dir
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or(default_base_dir(app)?);
-    allowed_roots.push(forgebook_root_from_base(&current_base));
-    for recent in config.recent_vault_roots {
-        allowed_roots.push(PathBuf::from(recent));
-    }
-    allowed_roots.push(state.config_dir.clone());
+
+    let mut allowed_roots = vec![forgebook_root_from_base(&current_base), state.config_dir.clone()];
+    allowed_roots.extend(config.recent_vault_roots.into_iter().map(PathBuf::from));
+
     let candidate = canonicalize_for_check(path)?;
     if allowed_roots
         .into_iter()
@@ -358,14 +360,14 @@ fn is_path_allowed(app: &AppHandle, state: &ForgeBookDesktopState, path: &Path) 
     {
         Ok(())
     } else {
-        Err(ForgeBookDesktopError::Message(format!(
+        Err(DesktopError::Message(format!(
             "Unsafe path blocked: {}",
             path.to_string_lossy()
         )))
     }
 }
 
-fn ensure_parent(path: &Path) -> Result<(), ForgeBookDesktopError> {
+fn ensure_parent(path: &Path) -> Result<(), DesktopError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -404,33 +406,7 @@ fn backup_directory_for(path: &Path) -> PathBuf {
         .join("backups")
 }
 
-fn create_backup(path: &Path) -> Result<(), ForgeBookDesktopError> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let backup_root = backup_directory_for(path);
-    fs::create_dir_all(&backup_root)?;
-    let relative = relative_to_vault_root(path);
-    let stem = relative.to_string_lossy().replace(['\\', '/', ':'], "__");
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let backup_path = if path.is_dir() {
-        backup_root.join(format!("{}-{}", stem, stamp))
-    } else {
-        backup_root.join(format!("{}-{}.bak", stem, stamp))
-    };
-    if path.is_dir() {
-        copy_dir_recursive(path, &backup_path)?;
-    } else {
-        fs::copy(path, &backup_path)?;
-    }
-    prune_backups(&backup_root, &stem)?;
-    Ok(())
-}
-
-fn prune_backups(backup_root: &Path, prefix: &str) -> Result<(), ForgeBookDesktopError> {
+fn prune_backups(backup_root: &Path, prefix: &str) -> Result<(), DesktopError> {
     let mut matching = Vec::new();
     for entry in fs::read_dir(backup_root)? {
         let entry = entry?;
@@ -453,93 +429,14 @@ fn prune_backups(backup_root: &Path, prefix: &str) -> Result<(), ForgeBookDeskto
     Ok(())
 }
 
-fn atomic_write_text(path: &Path, contents: &str) -> Result<(), ForgeBookDesktopError> {
-    ensure_parent(path)?;
-    create_backup(path)?;
-    let parent = path.parent().ok_or_else(|| {
-        ForgeBookDesktopError::Message("Write target has no parent directory".into())
-    })?;
-    let mut temp = NamedTempFile::new_in(parent)?;
-    temp.write_all(contents.as_bytes())?;
-    temp.flush()?;
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    temp.persist(path)
-        .map_err(|error| ForgeBookDesktopError::Io(error.error))?;
-    Ok(())
-}
-
-fn atomic_write_json<T: Serialize>(
-    path: &Path,
-    value: &T,
-    backup_source: Option<&Path>,
-) -> Result<(), ForgeBookDesktopError> {
-    if let Some(source) = backup_source {
-        create_backup(source)?;
-    }
-    let contents = serde_json::to_string_pretty(value)?;
-    atomic_write_text(path, &contents)
-}
-
-fn directory_entries(path: &Path, recursive: bool) -> Result<Vec<DirectoryEntryPayload>, ForgeBookDesktopError> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let mut entries = Vec::new();
-    let walker = if recursive {
-        WalkDir::new(path)
-    } else {
-        WalkDir::new(path).max_depth(1)
-    };
-    for entry in walker.into_iter().filter_map(Result::ok) {
-        let current = entry.path();
-        if current == path {
-            continue;
-        }
-        let metadata = fs::metadata(current)?;
-        let modified_at = metadata
-            .modified()
-            .map(now_timestamp_for)
-            .unwrap_or_else(|_| now_timestamp_string());
-        entries.push(DirectoryEntryPayload {
-            path: current.to_string_lossy().to_string(),
-            kind: if metadata.is_dir() {
-                "directory".into()
-            } else {
-                "file".into()
-            },
-            size: if metadata.is_file() { metadata.len() } else { 0 },
-            modified_at,
-        });
-    }
-    Ok(entries)
-}
-
-fn now_timestamp_for(time: SystemTime) -> String {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string()
-}
-
-fn map_watch_event_kind(kind: &EventKind) -> (&'static str, &'static str) {
-    match kind {
-        EventKind::Create(_) => ("file_added", "create"),
-        EventKind::Remove(_) => ("file_deleted", "remove"),
-        EventKind::Modify(_) => ("file_changed", "modify"),
-        _ => ("file_changed", "other"),
-    }
-}
-
-fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), ForgeBookDesktopError> {
+fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), DesktopError> {
     fs::create_dir_all(to)?;
     for entry in WalkDir::new(from).min_depth(1) {
-        let entry = entry.map_err(|error| ForgeBookDesktopError::Message(error.to_string()))?;
+        let entry = entry.map_err(|error| DesktopError::Message(error.to_string()))?;
         let relative = entry
             .path()
             .strip_prefix(from)
-            .map_err(|error| ForgeBookDesktopError::Message(error.to_string()))?;
+            .map_err(|error| DesktopError::Message(error.to_string()))?;
         let target = to.join(relative);
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
@@ -551,9 +448,124 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), ForgeBookDesktopErro
     Ok(())
 }
 
-fn move_path_safe(from: &Path, to: &Path) -> Result<(), ForgeBookDesktopError> {
+fn create_backup(path: &Path) -> Result<(), DesktopError> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let backup_root = backup_directory_for(path);
+    fs::create_dir_all(&backup_root)?;
+
+    let relative = relative_to_vault_root(path);
+    let stem = relative.to_string_lossy().replace(['\\', '/', ':'], "__");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let backup_path = if path.is_dir() {
+        backup_root.join(format!("{stem}-{stamp}"))
+    } else {
+        backup_root.join(format!("{stem}-{stamp}.bak"))
+    };
+
+    if path.is_dir() {
+        copy_dir_recursive(path, &backup_path)?;
+    } else {
+        fs::copy(path, &backup_path)?;
+    }
+
+    prune_backups(&backup_root, &stem)?;
+    Ok(())
+}
+
+fn atomic_write_text(path: &Path, contents: &str) -> Result<(), DesktopError> {
+    ensure_parent(path)?;
+    create_backup(path)?;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| DesktopError::Message("Write target has no parent directory".into()))?;
+
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.write_all(contents.as_bytes())?;
+    temp.flush()?;
+
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+
+    temp.persist(path)
+        .map_err(|error| DesktopError::Io(error.error))?;
+    Ok(())
+}
+
+fn write_text(path: &Path, contents: &str, atomic: bool) -> Result<(), DesktopError> {
+    if atomic {
+        return atomic_write_text(path, contents);
+    }
+    ensure_parent(path)?;
+    create_backup(path)?;
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), DesktopError> {
+    atomic_write_text(path, &serde_json::to_string_pretty(value)?)
+}
+
+fn entry_payload(path: &Path) -> Result<DirectoryEntryPayload, DesktopError> {
+    let metadata = fs::metadata(path)?;
+    Ok(DirectoryEntryPayload {
+        path: path.to_string_lossy().to_string(),
+        kind: if metadata.is_dir() {
+            "directory".into()
+        } else {
+            "file".into()
+        },
+        size: if metadata.is_file() { metadata.len() } else { 0 },
+        modified_at: metadata
+            .modified()
+            .map(now_timestamp_for)
+            .unwrap_or_else(|_| now_timestamp_string()),
+    })
+}
+
+fn directory_entries(path: &Path, recursive: bool) -> Result<Vec<DirectoryEntryPayload>, DesktopError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let walker = if recursive {
+        WalkDir::new(path)
+    } else {
+        WalkDir::new(path).max_depth(1)
+    };
+
+    let mut entries = Vec::new();
+    for entry in walker.into_iter().filter_map(Result::ok) {
+        let current = entry.path();
+        if current == path {
+            continue;
+        }
+        entries.push(entry_payload(current)?);
+    }
+    Ok(entries)
+}
+
+fn map_watch_event_kind(kind: &EventKind) -> (&'static str, &'static str) {
+    match kind {
+        EventKind::Create(_) => ("file_added", "create"),
+        EventKind::Remove(_) => ("file_deleted", "remove"),
+        EventKind::Modify(_) => ("file_changed", "modify"),
+        _ => ("file_changed", "other"),
+    }
+}
+
+fn move_path_safe(from: &Path, to: &Path) -> Result<(), DesktopError> {
     ensure_parent(to)?;
     create_backup(to)?;
+
     match fs::rename(from, to) {
         Ok(_) => Ok(()),
         Err(_) => {
@@ -572,16 +584,14 @@ fn move_path_safe(from: &Path, to: &Path) -> Result<(), ForgeBookDesktopError> {
 #[tauri::command]
 fn forgebook_get_app_paths(
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<AppPathsPayload> {
     current_paths(&app, &state).map_err(Into::into)
 }
 
 #[tauri::command]
-fn forgebook_list_recent_vaults(
-    state: State<ForgeBookDesktopState>,
-) -> CommandResult<Vec<String>> {
-    ensure_config_loaded(&state)
+fn forgebook_list_recent_vaults(state: State<'_, ForgeBookDesktopState>) -> CommandResult<Vec<String>> {
+    load_config(&state)
         .map(|config| config.recent_vault_roots)
         .map_err(Into::into)
 }
@@ -589,20 +599,23 @@ fn forgebook_list_recent_vaults(
 #[tauri::command]
 fn forgebook_select_vault_folder(
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<Option<AppPathsPayload>> {
     let selected = app.dialog().file().blocking_pick_folder();
     let Some(file_path) = selected else {
         return Ok(None);
     };
+
     let selected_path = file_path
         .into_path()
-        .map_err(|error| ForgeBookDesktopError::Message(error.to_string()))?;
+        .map_err(|error| DesktopError::Message(error.to_string()))?;
     let forgebook_root = normalize_selected_root(&selected_path);
     ensure_forgebook_root(&forgebook_root)?;
-    let mut config = ensure_config_loaded(&state)?;
+
+    let mut config = load_config(&state)?;
     remember_root(&mut config, &forgebook_root);
     save_config(&state, &config)?;
+
     current_paths(&app, &state).map(Some).map_err(Into::into)
 }
 
@@ -610,11 +623,13 @@ fn forgebook_select_vault_folder(
 fn forgebook_create_vault(
     request: PathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<VaultLoadPayload> {
-    let vault_root = PathBuf::from(request.path);
+    let vault_root = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &vault_root)?;
+
     for segment in [
+        "folders",
         "notes",
         "boards",
         "docs",
@@ -624,10 +639,17 @@ fn forgebook_create_vault(
     ] {
         fs::create_dir_all(vault_root.join(segment))?;
     }
-    atomic_write_text(&vault_root.join(".forgebook").join("settings.json"), "{}")?;
-    if !vault_root.join(".forgebook").join("vault.db").exists() {
-        atomic_write_text(&vault_root.join(".forgebook").join("vault.db"), "")?;
+
+    let settings_path = vault_root.join(".forgebook").join("settings.json");
+    if !settings_path.exists() {
+        atomic_write_text(&settings_path, "{}")?;
     }
+
+    let database_path = vault_root.join(".forgebook").join("vault.db");
+    if !database_path.exists() {
+        write_text(&database_path, "", false)?;
+    }
+
     forgebook_load_vault(
         PathRequest {
             path: vault_root.to_string_lossy().to_string(),
@@ -641,14 +663,16 @@ fn forgebook_create_vault(
 fn forgebook_load_vault(
     request: PathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<VaultLoadPayload> {
-    let vault_root = PathBuf::from(request.path);
+    let vault_root = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &vault_root)?;
+
     let entries = directory_entries(&vault_root, true)?;
-    let mut config = ensure_config_loaded(&state)?;
+    let mut config = load_config(&state)?;
     remember_loaded_vault(&mut config, &vault_root);
     save_config(&state, &config)?;
+
     Ok(VaultLoadPayload {
         root_path: vault_root.to_string_lossy().to_string(),
         entries,
@@ -659,52 +683,44 @@ fn forgebook_load_vault(
 fn forgebook_read_file(
     request: PathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
-) -> CommandResult<String> {
+    state: State<'_, ForgeBookDesktopState>,
+) -> CommandResult<Option<String>> {
     let path = PathBuf::from(request.path);
     is_path_allowed(&app, &state, &path)?;
-    fs::read_to_string(path).map_err(|error| error.into())
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[tauri::command]
 fn forgebook_write_file(
     request: WriteFileRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<DirectoryEntryPayload> {
-    let path = PathBuf::from(request.path);
+    let path = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &path)?;
-    let _ = request.atomic;
-    atomic_write_text(&path, &request.contents)?;
-    let metadata = fs::metadata(&path)?;
-    Ok(DirectoryEntryPayload {
-        path: path.to_string_lossy().to_string(),
-        kind: if metadata.is_dir() {
-            "directory".into()
-        } else {
-            "file".into()
-        },
-        size: metadata.len(),
-        modified_at: metadata
-            .modified()
-            .map(now_timestamp_for)
-            .unwrap_or_else(|_| now_timestamp_string()),
-    })
+    write_text(&path, &request.contents, request.atomic.unwrap_or(true))?;
+    entry_payload(&path).map_err(Into::into)
 }
 
 #[tauri::command]
 fn forgebook_delete_file(
     request: DeletePathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<bool> {
-    let path = PathBuf::from(request.path);
+    let path = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &path)?;
+
     if path.is_file() && path.exists() {
         create_backup(&path)?;
         fs::remove_file(path)?;
         return Ok(true);
     }
+
     if path.is_dir() && path.exists() {
         create_backup(&path)?;
         if request.recursive.unwrap_or(false) {
@@ -713,6 +729,7 @@ fn forgebook_delete_file(
             fs::remove_dir(path)?;
         }
     }
+
     Ok(true)
 }
 
@@ -720,9 +737,9 @@ fn forgebook_delete_file(
 fn forgebook_list_directory(
     request: ListDirectoryRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<Vec<DirectoryEntryPayload>> {
-    let path = PathBuf::from(request.path);
+    let path = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &path)?;
     directory_entries(&path, request.recursive.unwrap_or(true)).map_err(Into::into)
 }
@@ -731,9 +748,9 @@ fn forgebook_list_directory(
 fn forgebook_create_directory(
     request: CreateDirectoryRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<bool> {
-    let path = PathBuf::from(request.path);
+    let path = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &path)?;
     fs::create_dir_all(path)?;
     Ok(true)
@@ -743,10 +760,10 @@ fn forgebook_create_directory(
 fn forgebook_move_file(
     request: MovePathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<bool> {
-    let from_path = PathBuf::from(request.from);
-    let to_path = PathBuf::from(request.to);
+    let from_path = PathBuf::from(&request.from);
+    let to_path = PathBuf::from(&request.to);
     is_path_allowed(&app, &state, &from_path)?;
     is_path_allowed(&app, &state, &to_path)?;
     move_path_safe(&from_path, &to_path)?;
@@ -757,12 +774,13 @@ fn forgebook_move_file(
 fn forgebook_copy_file(
     request: MovePathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<bool> {
-    let from_path = PathBuf::from(request.from);
-    let to_path = PathBuf::from(request.to);
+    let from_path = PathBuf::from(&request.from);
+    let to_path = PathBuf::from(&request.to);
     is_path_allowed(&app, &state, &from_path)?;
     is_path_allowed(&app, &state, &to_path)?;
+
     if from_path.is_dir() {
         copy_dir_recursive(&from_path, &to_path)?;
     } else {
@@ -770,6 +788,7 @@ fn forgebook_copy_file(
         create_backup(&to_path)?;
         fs::copy(from_path, to_path)?;
     }
+
     Ok(true)
 }
 
@@ -777,21 +796,23 @@ fn forgebook_copy_file(
 fn forgebook_watch_path(
     request: WatchPathRequest,
     app: AppHandle,
-    state: State<ForgeBookDesktopState>,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<WatchRegistrationPayload> {
     let watch_path = PathBuf::from(&request.path);
     is_path_allowed(&app, &state, &watch_path)?;
+
     let watcher_id = Uuid::new_v4().to_string();
     let app_handle = app.clone();
     let watched_root = watch_path.clone();
-    let id_for_event = watcher_id.clone();
+    let watcher_id_for_event = watcher_id.clone();
+
     let mut watcher = RecommendedWatcher::new(
         move |event: notify::Result<Event>| {
             if let Ok(event) = event {
                 let (event_name, kind_name) = map_watch_event_kind(&event.kind);
                 for changed_path in event.paths {
                     let payload = WatchEventPayload {
-                        watcher_id: id_for_event.clone(),
+                        watcher_id: watcher_id_for_event.clone(),
                         path: watched_root.to_string_lossy().to_string(),
                         event_path: changed_path.to_string_lossy().to_string(),
                         event: event_name.to_string(),
@@ -804,6 +825,7 @@ fn forgebook_watch_path(
         },
         NotifyConfig::default(),
     )?;
+
     watcher.watch(
         &watch_path,
         if request.recursive.unwrap_or(true) {
@@ -812,11 +834,13 @@ fn forgebook_watch_path(
             RecursiveMode::NonRecursive
         },
     )?;
+
     state
         .watchers
         .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Watcher registry lock poisoned".into()))?
+        .map_err(|_| DesktopError::Message("Watcher registry lock poisoned".into()))?
         .insert(watcher_id.clone(), watcher);
+
     Ok(WatchRegistrationPayload {
         watcher_id,
         path: request.path,
@@ -825,84 +849,37 @@ fn forgebook_watch_path(
 
 #[tauri::command]
 fn forgebook_unwatch_path(
-    watcher_id: String,
-    state: State<ForgeBookDesktopState>,
+    request: UnwatchPathRequest,
+    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<bool> {
     state
         .watchers
         .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Watcher registry lock poisoned".into()))?
-        .remove(&watcher_id);
+        .map_err(|_| DesktopError::Message("Watcher registry lock poisoned".into()))?
+        .remove(&request.watcher_id);
     Ok(true)
 }
 
 #[tauri::command]
-async fn forgebook_check_for_updates(
+fn forgebook_check_for_updates(
     request: UpdateCheckRequest,
     app: AppHandle,
-    state: State<'_, ForgeBookDesktopState>,
 ) -> CommandResult<UpdateStatusPayload> {
     let current_version = request
         .current_version
         .unwrap_or_else(|| app.package_info().version.to_string());
-    let mut builder = app.updater_builder();
-    if let Some(feed_url) = request.feed_url.filter(|value| !value.trim().is_empty()) {
-        builder = builder.endpoints(vec![Url::parse(&feed_url).map_err(|error| {
-            ForgeBookDesktopError::Message(format!("Invalid update feed URL: {error}"))
-        })?])?;
-    }
-    if let Some(pubkey) = request.pubkey.filter(|value| !value.trim().is_empty()) {
-        builder = builder.pubkey(pubkey);
-    }
-    let updater = builder.build()?;
-    let pending = updater.check().await?;
-    let payload = if let Some(update) = pending.as_ref() {
-        UpdateStatusPayload {
-            available: true,
-            current_version: update.current_version.clone(),
-            version: update.version.clone(),
-            notes: update.body.clone().unwrap_or_default(),
-            date: update.date.map(|value| value.to_string()).unwrap_or_default(),
-            download_url: update.download_url.to_string(),
-        }
-    } else {
-        UpdateStatusPayload {
-            available: false,
-            current_version: current_version.clone(),
-            version: current_version,
-            notes: String::new(),
-            date: String::new(),
-            download_url: String::new(),
-        }
-    };
-    *state
-        .pending_update
-        .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Pending update lock poisoned".into()))? = pending;
-    Ok(payload)
+    let _ = request.feed_url;
+    Err(DesktopError::Message(format!(
+        "Desktop updater is not configured for version {current_version}"
+    ))
+    .into())
 }
 
 #[tauri::command]
-async fn forgebook_install_update(
-    app: AppHandle,
-    state: State<'_, ForgeBookDesktopState>,
-) -> CommandResult<UpdateInstallPayload> {
-    let pending = state
-        .pending_update
-        .lock()
-        .map_err(|_| ForgeBookDesktopError::Message("Pending update lock poisoned".into()))?
-        .take();
-    let Some(update) = pending else {
-        return Ok(UpdateInstallPayload {
-            installed: false,
-            version: app.package_info().version.to_string(),
-        });
-    };
-    let version = update.version.clone();
-    update.download_and_install(|_, _| {}, || {}).await?;
+fn forgebook_install_update(app: AppHandle) -> CommandResult<UpdateInstallPayload> {
     Ok(UpdateInstallPayload {
-        installed: true,
-        version,
+        installed: false,
+        version: app.package_info().version.to_string(),
     })
 }
 
@@ -917,14 +894,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
 
             let config_dir = app.path().app_config_dir().map_err(|error| {
-                ForgeBookDesktopError::Message(format!(
-                    "Could not resolve app config directory: {error}"
-                ))
+                DesktopError::Message(format!("Could not resolve app config directory: {error}"))
             })?;
             fs::create_dir_all(&config_dir)?;
             let config_path = config_dir.join("desktop-state.json");
@@ -942,7 +921,6 @@ pub fn run() {
                 config_path,
                 config: Mutex::new(config),
                 watchers: Mutex::new(HashMap::new()),
-                pending_update: Mutex::new(None),
             });
             Ok(())
         })

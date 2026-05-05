@@ -1,13 +1,14 @@
 {
   "version": "0.1.0",
-  "channel": "desktop preview",
+  "channel": "Alpha",
   "releaseDate": "2026-05-02T00:00:00Z",
   "notes": [
     "Desktop workspace boot is smoother and more stable.",
     "Tester profiles now support nickname-based local account creation.",
-    "The public website now acts as a download landing page for the desktop build."
+    "The public website now keeps the install flow inside ForgeBook with a dedicated download page."
   ],
   "downloads": {
-    "windows": "https://github.com/balinek468-beep/Playground/releases/latest"
+    "windows": "https://github.com/balinek468-beep/Playground/releases/download/v0.1.0/ForgeBook_0.1.0_x64-setup.exe",
+    "releaseNotes": "https://github.com/balinek468-beep/Playground/releases"
   }
 }

@@ -19,7 +19,7 @@ import {
 
 function normalizeRoute(pathname) {
   const path = String(pathname || "/").replace(/\/+$/, "") || "/";
-  if (["/", "/login", "/signup", "/app"].includes(path)) return path;
+  if (["/", "/download", "/login", "/signup", "/app"].includes(path)) return path;
   return "/";
 }
 
@@ -260,7 +260,7 @@ async function boot() {
     auth: { user: null },
     mode: "public",
   };
-  mountPublicApp({ route, user: null });
+  mountPublicApp({ route, anchor: window.location.hash.replace(/^#/, ""), user: null });
 }
 
 window.addEventListener("popstate", () => {
@@ -270,7 +270,7 @@ window.addEventListener("popstate", () => {
     window.location.assign("/app");
     return;
   }
-  mountPublicApp({ route, user: null });
+  mountPublicApp({ route, anchor: window.location.hash.replace(/^#/, ""), user: null });
 });
 
 try {
