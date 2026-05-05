@@ -2,14 +2,14 @@
   "version": "0.1.0-alpha",
   "channel": "Alpha",
   "releaseDate": "2026-05-05",
-  "releaseNotesUrl": "https://github.com/balinek468-beep/Playground/releases",
+  "releaseNotesUrl": "https://github.com/balinek468-beep/Playground/releases/tag/v0.1.0-alpha",
   "notes": [
     "The Windows installer and portable ZIP now have a documented Tauri release pipeline.",
     "The website download hub is wired for direct-file release assets and keeps unpublished files clearly disabled.",
     "Source ZIP and TAR.GZ downloads stay available directly from the ForgeBook website experience."
   ],
   "downloads": {
-    "releaseNotes": "https://github.com/balinek468-beep/Playground/releases",
+    "releaseNotes": "https://github.com/balinek468-beep/Playground/releases/tag/v0.1.0-alpha",
     "files": [
       {
         "id": "windows-installer",
@@ -21,9 +21,9 @@
         "buttonLabel": "Download Windows Installer",
         "description": "Install ForgeBook with the full desktop setup flow when the GitHub release asset is published.",
         "note": "Recommended download for most Windows users.",
-        "url": "",
+        "url": "https://github.com/balinek468-beep/Playground/releases/download/v0.1.0-alpha/ForgeBook-Setup-v0.1.0-alpha.exe",
         "downloadName": "ForgeBook-Setup-v0.1.0-alpha.exe",
-        "disabled": true
+        "disabled": false
       },
       {
         "id": "portable-zip",
@@ -35,9 +35,9 @@
         "buttonLabel": "Download Portable ZIP",
         "description": "Use a portable package when the zipped desktop build is published to the matching GitHub release.",
         "note": "Useful for testing or manual extraction workflows.",
-        "url": "",
+        "url": "https://github.com/balinek468-beep/Playground/releases/download/v0.1.0-alpha/ForgeBook-Portable-v0.1.0-alpha.zip",
         "downloadName": "ForgeBook-Portable-v0.1.0-alpha.zip",
-        "disabled": true
+        "disabled": false
       },
       {
         "id": "source-zip",
@@ -48,8 +48,8 @@
         "recommended": false,
         "buttonLabel": "Download Source ZIP",
         "description": "Download the current ForgeBook source snapshot directly as a ZIP archive.",
-        "note": "Current repository snapshot from the main branch until a tagged release archive is published.",
-        "url": "https://codeload.github.com/balinek468-beep/Playground/zip/refs/heads/main",
+        "note": "Tagged source archive for the v0.1.0-alpha release.",
+        "url": "https://github.com/balinek468-beep/Playground/archive/refs/tags/v0.1.0-alpha.zip",
         "downloadName": "ForgeBook-source.zip",
         "disabled": false
       },
@@ -62,8 +62,8 @@
         "recommended": false,
         "buttonLabel": "Download Source TAR.GZ",
         "description": "Download the current ForgeBook source snapshot directly as a TAR.GZ archive.",
-        "note": "Current repository snapshot from the main branch until a tagged release archive is published.",
-        "url": "https://codeload.github.com/balinek468-beep/Playground/tar.gz/refs/heads/main",
+        "note": "Tagged source archive for the v0.1.0-alpha release.",
+        "url": "https://github.com/balinek468-beep/Playground/archive/refs/tags/v0.1.0-alpha.tar.gz",
         "downloadName": "ForgeBook-source.tar.gz",
         "disabled": false
       }
