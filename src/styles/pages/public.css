@@ -247,7 +247,8 @@ body[data-app-mode="public"] .app-shell {
 .public-auth-card h2,
 .public-cta h2,
 .public-download-card h2,
-.public-info-card h2 {
+.public-info-card h2,
+.public-download-option-card h3 {
   margin: 0;
   font-size: 1.1rem;
 }
@@ -331,6 +332,12 @@ body[data-app-mode="public"] .app-shell {
   background: linear-gradient(180deg, rgba(17, 22, 33, 0.96), rgba(11, 15, 23, 0.96));
 }
 
+.public-download-card-featured {
+  background:
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(17, 22, 33, 0.98), rgba(11, 15, 23, 0.98));
+}
+
 .public-download-card-head {
   display: flex;
   justify-content: space-between;
@@ -378,6 +385,13 @@ body[data-app-mode="public"] .app-shell {
   align-items: start;
 }
 
+.public-download-support-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
 .public-download-primary {
   justify-self: start;
 }
@@ -396,6 +410,66 @@ body[data-app-mode="public"] .app-shell {
 
 .public-download-support-link-cta {
   font-size: 0.88rem;
+}
+
+.public-download-state,
+.public-download-card-note {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.public-download-state.is-live {
+  color: #9ef5e6;
+}
+
+.public-download-state.is-soon,
+.public-download-card-note {
+  color: #ffd3b1;
+}
+
+.public-download-section-head {
+  display: grid;
+  gap: 12px;
+}
+
+.public-downloads-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.public-download-option-card {
+  padding: 22px;
+  display: grid;
+  gap: 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(17, 22, 33, 0.96), rgba(11, 15, 23, 0.96));
+}
+
+.public-download-option-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.public-download-option-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.public-download-option-meta {
+  display: grid;
+  gap: 12px;
+}
+
+.public-download-option-actions {
+  display: grid;
+  gap: 10px;
+  align-items: start;
 }
 
 .public-step-grid,
@@ -455,6 +529,11 @@ body[data-app-mode="public"] .app-shell {
 }
 
 .public-status-badge.is-planned {
+  background: rgba(249, 115, 22, 0.14);
+  color: #ffd3b1;
+}
+
+.public-status-badge.is-soon {
   background: rgba(249, 115, 22, 0.14);
   color: #ffd3b1;
 }
@@ -587,11 +666,13 @@ body[data-app-mode="public"] .app-shell {
   }
 
   .public-download-card,
-  .public-info-card {
+  .public-info-card,
+  .public-download-option-card {
     padding: 20px;
   }
 
-  .public-download-card-head {
+  .public-download-card-head,
+  .public-download-option-head {
     flex-direction: column;
   }
 

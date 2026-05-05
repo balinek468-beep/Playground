@@ -2,6 +2,7 @@ import { createRouter } from "./router.js";
 import { createBaseStateSnapshot } from "./state.js";
 import { featureRegistry } from "./featureRegistry.js";
 import { APP_NAME } from "../utils/constants.js";
+import { APP_VERSION } from "../constants/release.js";
 import { initProductionRuntime } from "../services/runtime/ProductionRuntime.js";
 import { mountPublicApp } from "../public/PublicApp.js";
 import { prepareLocalFirstWorkspaceBoot, resetWorkspaceBootRuntime, writeWorkspaceSnapshot } from "./storage.js";
@@ -193,7 +194,7 @@ async function bootProtectedApp() {
   try {
     [vaultBoot, updater] = await Promise.all([
       prepareLocalFirstWorkspaceBoot(),
-      initializeUpdater({ currentVersion: "0.1.0" }),
+      initializeUpdater({ currentVersion: APP_VERSION }),
     ]);
   } catch (error) {
     console.error("ForgeBook desktop vault boot failed", error);
@@ -206,7 +207,7 @@ async function bootProtectedApp() {
 
     [vaultBoot, updater] = await Promise.all([
       prepareLocalFirstWorkspaceBoot(),
-      initializeUpdater({ currentVersion: "0.1.0" }),
+      initializeUpdater({ currentVersion: APP_VERSION }),
     ]);
   }
 

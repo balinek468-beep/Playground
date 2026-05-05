@@ -6,3 +6,4 @@ dist
 .env.production
 .vercel
 src-tauri/target
+release-assets

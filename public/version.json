@@ -1,14 +1,72 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "channel": "Alpha",
-  "releaseDate": "2026-05-02T00:00:00Z",
+  "releaseDate": "2026-05-05",
+  "releaseNotesUrl": "https://github.com/balinek468-beep/Playground/releases",
   "notes": [
-    "Desktop workspace boot is smoother and more stable.",
-    "Tester profiles now support nickname-based local account creation.",
-    "The public website now keeps the install flow inside ForgeBook with a dedicated download page."
+    "The Windows installer and portable ZIP now have a documented Tauri release pipeline.",
+    "The website download hub is wired for direct-file release assets and keeps unpublished files clearly disabled.",
+    "Source ZIP and TAR.GZ downloads stay available directly from the ForgeBook website experience."
   ],
   "downloads": {
-    "windows": "https://github.com/balinek468-beep/Playground/releases/download/v0.1.0/ForgeBook_0.1.0_x64-setup.exe",
-    "releaseNotes": "https://github.com/balinek468-beep/Playground/releases"
+    "releaseNotes": "https://github.com/balinek468-beep/Playground/releases",
+    "files": [
+      {
+        "id": "windows-installer",
+        "name": "ForgeBook Windows Installer",
+        "fileName": "ForgeBook-Setup-v0.1.0-alpha.exe",
+        "platform": "Windows 10+",
+        "type": "Installer",
+        "recommended": true,
+        "buttonLabel": "Download Windows Installer",
+        "description": "Install ForgeBook with the full desktop setup flow when the GitHub release asset is published.",
+        "note": "Recommended download for most Windows users.",
+        "url": "",
+        "downloadName": "ForgeBook-Setup-v0.1.0-alpha.exe",
+        "disabled": true
+      },
+      {
+        "id": "portable-zip",
+        "name": "ForgeBook Portable Build",
+        "fileName": "ForgeBook-Portable-v0.1.0-alpha.zip",
+        "platform": "Windows 10+",
+        "type": "Portable ZIP",
+        "recommended": false,
+        "buttonLabel": "Download Portable ZIP",
+        "description": "Use a portable package when the zipped desktop build is published to the matching GitHub release.",
+        "note": "Useful for testing or manual extraction workflows.",
+        "url": "",
+        "downloadName": "ForgeBook-Portable-v0.1.0-alpha.zip",
+        "disabled": true
+      },
+      {
+        "id": "source-zip",
+        "name": "ForgeBook Source Package ZIP",
+        "fileName": "Source code ZIP",
+        "platform": "Source",
+        "type": "ZIP",
+        "recommended": false,
+        "buttonLabel": "Download Source ZIP",
+        "description": "Download the current ForgeBook source snapshot directly as a ZIP archive.",
+        "note": "Current repository snapshot from the main branch until a tagged release archive is published.",
+        "url": "https://codeload.github.com/balinek468-beep/Playground/zip/refs/heads/main",
+        "downloadName": "ForgeBook-source.zip",
+        "disabled": false
+      },
+      {
+        "id": "source-tar-gz",
+        "name": "ForgeBook Source Package TAR.GZ",
+        "fileName": "Source code TAR.GZ",
+        "platform": "Source",
+        "type": "TAR.GZ",
+        "recommended": false,
+        "buttonLabel": "Download Source TAR.GZ",
+        "description": "Download the current ForgeBook source snapshot directly as a TAR.GZ archive.",
+        "note": "Current repository snapshot from the main branch until a tagged release archive is published.",
+        "url": "https://codeload.github.com/balinek468-beep/Playground/tar.gz/refs/heads/main",
+        "downloadName": "ForgeBook-source.tar.gz",
+        "disabled": false
+      }
+    ]
   }
 }
